@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.pnpm-cache/
+.pnpm-state/
+.pnpm-global/
+
+# Frontend build
+dist/
+dist-ssr/
+*.local
+
+# Rust / Tauri build and runtime data
+src-tauri/target/
+**/EBWebView/
+**/webview2-data/
+**/easy-git-data/
+
+# Local scratch and debug leftovers
+/a.txt
+/backups/
+
+# Logs
+*.log
+*.tmp
+*.out
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo

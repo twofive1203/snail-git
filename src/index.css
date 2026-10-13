@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* JetBrains 风格经典无缝暗黑细滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #393B40;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4E5157;
+}
+
+/* 按钮与交互点 */
+button:focus-visible {
+  outline: 2px solid #3574F0;
+  outline-offset: -1px;
+}
+
+/* 代码字体平滑渲染 */
+.font-mono {
+  font-variant-ligatures: normal;
+}
