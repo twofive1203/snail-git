@@ -16,6 +16,12 @@ interface CommitViewProps {
   onRollbackFile: (file: FileChange) => void;
   onRefresh: () => void;
   onRequestDiff: (file: FileChange) => void;
+  onCreatePatch: () => void;
+  repoKey?: string;
+  ignoreWhitespace?: boolean;
+  onIgnoreWhitespaceChange?: (value: boolean) => void;
+  onResolveConflict?: (file: FileChange) => void;
+  onSelectedFileChange?: (file: FileChange | null) => void;
 }
 
 export const CommitView: React.FC<CommitViewProps> = ({
@@ -30,6 +36,12 @@ export const CommitView: React.FC<CommitViewProps> = ({
   onRollbackFile,
   onRefresh,
   onRequestDiff,
+  onCreatePatch,
+  repoKey,
+  ignoreWhitespace,
+  onIgnoreWhitespaceChange,
+  onResolveConflict,
+  onSelectedFileChange,
 }) => {
   const [selectedFileId, setSelectedFileId] = useState<string>(
     changes.length > 0 ? changes[0].id : ''
@@ -42,6 +54,10 @@ export const CommitView: React.FC<CommitViewProps> = ({
   }, [changes, selectedFileId]);
 
   const selectedFile = changes.find(c => c.id === selectedFileId) || null;
+
+  useEffect(() => {
+    onSelectedFileChange?.(selectedFile);
+  }, [selectedFile, onSelectedFileChange]);
 
   useEffect(() => {
     if (selectedFile && !selectedFile.chunksLoaded) {
@@ -71,12 +87,21 @@ export const CommitView: React.FC<CommitViewProps> = ({
           if (selectedFile) onRollbackFile(selectedFile);
         }}
         onRefresh={onRefresh}
+        repoKey={repoKey}
       />
 
       {/* 右侧：双栏 Diff 与 底部 Commit 操作区 */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
+        {selectedFile?.status === 'conflict' && (
+          <div className="h-8 px-3 border-b border-jb-border bg-rose-950/30 flex items-center justify-between text-xs">
+            <span className="text-rose-200">这个文件有冲突，普通 diff 无法安全合并。</span>
+            <button onClick={() => onResolveConflict?.(selectedFile)} className="px-2 py-1 rounded bg-purple-500/30 text-purple-100">打开三方合并</button>
+          </div>
+        )}
         <SideBySideDiff
           file={selectedFile}
+          ignoreWhitespace={ignoreWhitespace}
+          onIgnoreWhitespaceChange={onIgnoreWhitespaceChange}
           onToggleChunkStage={(chunkId) => {
             if (selectedFile) onToggleChunkStage(selectedFile, chunkId);
           }}
@@ -90,6 +115,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
           onCommit={(msg, isAmend) => onCommit(msg, isAmend, false)}
           onCommitAndPush={(msg, isAmend) => onCommit(msg, isAmend, true)}
           onShelve={onShelve}
+          onCreatePatch={onCreatePatch}
         />
       </div>
     </div>

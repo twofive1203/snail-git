@@ -17,12 +17,14 @@ interface TabBarProps {
   activeTab: ActiveTab;
   onTabChange: (tab: ActiveTab) => void;
   changesCount: number;
+  gitVersion?: string;
 }
 
 export const TabBar: React.FC<TabBarProps> = ({
   activeTab,
   onTabChange,
-  changesCount
+  changesCount,
+  gitVersion = '未连接 Git',
 }) => {
   const tabs = [
     { 
@@ -96,7 +98,7 @@ export const TabBar: React.FC<TabBarProps> = ({
         <span className="flex items-center space-x-1.5 font-mono text-[11px]">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span className="text-[#DFE1E5]">
-            {isTauriEnvironment() ? 'Tauri 2.0 Native' : 'Git 2.34.1 Ready'}
+            {isTauriEnvironment() ? 'Tauri 2.0 Native' : gitVersion}
           </span>
           <span className="text-[10px] text-[#6F737A] bg-[#1E1F22] px-1 rounded border border-[#393B40]">
             {isTauriEnvironment() ? 'Desktop' : 'Web'}

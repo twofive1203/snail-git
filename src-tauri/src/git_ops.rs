@@ -3,7 +3,119 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+/// 安装版是 windows subsystem，自己没有控制台。
+/// 同一时刻只允许一个 git 子进程，避免轮询和快照叠在一起抢 index.lock、堆出大量进程。
+static GIT_SLOT: Mutex<()> = Mutex::new(());
+
+pub fn acquire_git_slot() -> std::sync::MutexGuard<'static, ()> {
+    GIT_SLOT.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+fn hide_console(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW：GUI 进程拉起 git.exe / powershell.exe 时不要再分配控制台。
+        cmd.creation_flags(0x08000000);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
+pub fn hidden_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.stdin(Stdio::null());
+    hide_console(&mut cmd);
+    cmd
+}
+
+fn git_executable() -> &'static str {
+    static GIT: OnceLock<String> = OnceLock::new();
+    GIT.get_or_init(|| {
+        // 只找 git.exe，避开 git.cmd。再换成 mingw64\bin\git.exe，避免包装器自己弹控制台。
+        #[cfg(windows)]
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                let exe = dir.join("git.exe");
+                if exe.is_file() {
+                    return prefer_real_git(&exe).to_string_lossy().into_owned();
+                }
+            }
+        }
+        "git".to_string()
+    })
+    .as_str()
+}
+
+fn prefer_real_git(exe: &Path) -> PathBuf {
+    // cmd\git.exe 和 bin\git.exe 都是约 45KB 的包装器，会自己再分配控制台。
+    // mingw64\bin\git.exe 才是真正的 git。
+    let Some(root) = git_install_root(exe) else {
+        return exe.to_path_buf();
+    };
+    for rel in ["mingw64/bin/git.exe", "mingw32/bin/git.exe"] {
+        let candidate = root.join(rel);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    exe.to_path_buf()
+}
+
+fn git_install_root(exe: &Path) -> Option<PathBuf> {
+    let parent = exe.parent()?;
+    let name = parent.file_name()?.to_string_lossy();
+    if name == "bin" {
+        let up = parent.parent()?;
+        let up_name = up.file_name()?.to_string_lossy();
+        if up_name == "mingw64" || up_name == "mingw32" {
+            return up.parent().map(|dir| dir.to_path_buf());
+        }
+        return Some(up.to_path_buf());
+    }
+    if name == "cmd" {
+        return parent.parent().map(|dir| dir.to_path_buf());
+    }
+    None
+}
+
+fn git_path_with_helpers(exe: &Path) -> Option<std::ffi::OsString> {
+    let root = git_install_root(exe)?;
+    let mut prefix = std::ffi::OsString::new();
+    for rel in ["cmd", "bin", "usr/bin", "mingw64/bin", "mingw32/bin"] {
+        let dir = root.join(rel);
+        if !dir.is_dir() {
+            continue;
+        }
+        if !prefix.is_empty() {
+            prefix.push(";");
+        }
+        prefix.push(dir.as_os_str());
+    }
+    if prefix.is_empty() {
+        return None;
+    }
+    if let Some(existing) = std::env::var_os("PATH") {
+        prefix.push(";");
+        prefix.push(existing);
+    }
+    Some(prefix)
+}
+
+pub fn git_command() -> Command {
+    let exe = git_executable();
+    let mut cmd = hidden_command(exe);
+    cmd.env("GIT_TERMINAL_PROMPT", "0").env("GIT_PAGER", "cat");
+    if let Some(path) = git_path_with_helpers(Path::new(exe)) {
+        cmd.env("PATH", path);
+    }
+    cmd
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +145,15 @@ pub struct DiffChunkDto {
     pub raw_patch: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WordSpanDto {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffLineDto {
     #[serde(rename = "type")]
@@ -42,6 +162,10 @@ pub struct DiffLineDto {
     pub new_line_number: Option<u32>,
     pub old_content: Option<String>,
     pub new_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word_diff: Option<Vec<WordSpanDto>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_word_diff: Option<Vec<WordSpanDto>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,6 +206,8 @@ pub struct GitBranchDto {
     pub behind: Option<u32>,
     pub last_commit_hash: String,
     pub last_commit_message: String,
+    #[serde(default)]
+    pub is_favorite: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -238,26 +364,34 @@ fn lossy(bytes: &[u8]) -> String {
 }
 
 fn git_base(cwd: &str) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.current_dir(cwd)
-        .stdin(Stdio::null())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .args([
-            "-c",
-            "core.quotepath=false",
-            "-c",
-            "i18n.logOutputEncoding=utf-8",
-        ]);
+    let mut cmd = git_command();
+    cmd.current_dir(cwd).args([
+        "--no-pager",
+        "-c",
+        "core.quotepath=false",
+        "-c",
+        "i18n.logOutputEncoding=utf-8",
+    ]);
     cmd
 }
 
 fn run_git(cwd: &str, args: &[&str], timeout: Duration) -> Result<Output, String> {
+    run_git_global(cwd, &[], args, timeout)
+}
+
+fn run_git_global(
+    cwd: &str,
+    global: &[&str],
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, String> {
     let mut cmd = git_base(cwd);
-    cmd.args(args);
+    cmd.args(global).args(args);
     output_timeout(cmd, timeout)
 }
 
 fn output_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String> {
+    let _slot = acquire_git_slot();
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -344,9 +478,9 @@ fn recycle_file(path: &Path) -> Result<(), String> {
     let script = format!(
         "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('{escaped}', 'OnlyErrorDialogs', 'SendToRecycleBin')"
     );
-    let output = Command::new("powershell")
+    let _slot = acquire_git_slot();
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-Command", &script])
-        .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("无法把文件移入回收站：{e}"))?;
     if output.status.success() {
@@ -393,7 +527,12 @@ fn map_xy(x: char, y: char) -> (String, bool) {
 pub fn status_files(repo: &str) -> Result<Vec<FileChangeDto>, String> {
     let output = run_git(
         repo,
-        &["status", "--porcelain=v1", "-z", "-uall"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+        ],
         Duration::from_secs(20),
     )?;
     if !output.status.success() {
@@ -446,20 +585,53 @@ pub fn status_files(repo: &str) -> Result<Vec<FileChangeDto>, String> {
 }
 
 pub fn signature(repo: &str) -> String {
-    match run_git(
+    poll_signature(repo).unwrap_or_default()
+}
+
+/// 轮询用。失败返回 None，调用方应保留上一次签名，避免超时和成功交替把刷新打成死循环。
+pub fn poll_signature(repo: &str) -> Option<String> {
+    let out = run_git_global(
         repo,
-        &["status", "--porcelain=v1", "-uall"],
+        &["--no-optional-locks"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=normal",
+            "--ignore-submodules=dirty",
+        ],
         Duration::from_secs(8),
-    ) {
-        Ok(out) => {
-            let head = run_git(repo, &["rev-parse", "HEAD"], Duration::from_secs(5))
-                .ok()
-                .map(|o| lossy(&o.stdout))
-                .unwrap_or_default();
-            format!("{head}\n{}", lossy(&out.stdout))
-        }
-        Err(_) => String::new(),
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
     }
+    Some(format!("{}\n{}", read_head_hint(repo), lossy(&out.stdout)))
+}
+
+fn read_head_hint(repo: &str) -> String {
+    let dotgit = Path::new(repo).join(".git");
+    let head = if dotgit.is_dir() {
+        dotgit.join("HEAD")
+    } else {
+        let Ok(text) = fs::read_to_string(&dotgit) else {
+            return String::new();
+        };
+        let Some(dir) = text
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("gitdir:"))
+            .map(|p| p.trim().to_string())
+        else {
+            return String::new();
+        };
+        let dir = PathBuf::from(dir);
+        let dir = if dir.is_absolute() {
+            dir
+        } else {
+            Path::new(repo).join(dir)
+        };
+        dir.join("HEAD")
+    };
+    fs::read_to_string(head).unwrap_or_default().trim().to_string()
 }
 
 fn ahead_behind(repo: &str) -> (u32, u32) {
@@ -580,7 +752,73 @@ pub fn git_log(repo: &str) -> Result<Vec<GitCommitDto>, String> {
         });
     }
     assign_tracks(&mut commits);
+    attach_numstat(repo, &mut commits);
     Ok(commits)
+}
+
+fn attach_numstat(repo: &str, commits: &mut [GitCommitDto]) {
+    let output = match run_git(
+        repo,
+        &[
+            "log",
+            "--all",
+            "--date-order",
+            "-n",
+            "200",
+            "--numstat",
+            "--pretty=format:%H",
+        ],
+        Duration::from_secs(25),
+    ) {
+        Ok(output) if output.status.success() => lossy(&output.stdout),
+        _ => return,
+    };
+    let mut current = String::new();
+    let mut stats: std::collections::HashMap<String, Vec<(i32, i32, String)>> = std::collections::HashMap::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !line.contains('\t') && line.chars().all(|c| c.is_ascii_hexdigit()) && line.len() >= 7 {
+            current = line.to_string();
+            continue;
+        }
+        if current.is_empty() {
+            continue;
+        }
+        let mut cols = line.split('\t');
+        let additions = cols.next().unwrap_or("0").parse::<i32>().unwrap_or(0);
+        let deletions = cols.next().unwrap_or("0").parse::<i32>().unwrap_or(0);
+        let path = cols.next().unwrap_or("").replace('\\', "/");
+        if path.is_empty() {
+            continue;
+        }
+        stats.entry(current.clone()).or_default().push((additions, deletions, path));
+    }
+    for commit in commits.iter_mut() {
+        let Some(rows) = stats.get(&commit.hash) else {
+            continue;
+        };
+        for file in &mut commit.files {
+            let wanted = file.path.replace('\\', "/");
+            if let Some((additions, deletions, _)) = rows.iter().find(|(_, _, path)| numstat_matches(&wanted, path)) {
+                file.additions = *additions;
+                file.deletions = *deletions;
+            }
+        }
+    }
+}
+
+fn numstat_matches(file_path: &str, stat_path: &str) -> bool {
+    if file_path == stat_path {
+        return true;
+    }
+    if let Some(idx) = stat_path.rfind("=>") {
+        let after = stat_path[idx + 2..].trim().trim_matches(|c| c == '{' || c == '}');
+        return !after.is_empty() && (file_path == after || file_path.ends_with(&format!("/{after}")));
+    }
+    false
 }
 
 fn assign_tracks(commits: &mut [GitCommitDto]) {
@@ -644,6 +882,7 @@ pub fn list_branches(repo: &str, current: &str) -> Result<Vec<GitBranchDto>, Str
             continue;
         };
         let is_current = !is_remote && name == current;
+        let favorites = favorite_branch_names(repo);
         branches.push(GitBranchDto {
             ahead: if is_current { Some(ahead) } else { None },
             behind: if is_current { Some(behind) } else { None },
@@ -652,6 +891,7 @@ pub fn list_branches(repo: &str, current: &str) -> Result<Vec<GitBranchDto>, Str
             upstream: None,
             last_commit_hash: hash,
             last_commit_message: subject,
+            is_favorite: favorites.iter().any(|n| n == &name),
             name,
         });
     }
@@ -668,7 +908,13 @@ pub fn list_stashes(repo: &str) -> Result<Vec<StashItemDto>, String> {
         return Ok(Vec::new());
     }
     let text = lossy(&output.stdout);
+    let counts = if text.trim().is_empty() {
+        Vec::new()
+    } else {
+        stash_file_counts(repo)
+    };
     let mut items = Vec::new();
+    let mut seen = 0usize;
     for (idx, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -689,19 +935,8 @@ pub fn list_stashes(repo: &str) -> Result<Vec<StashItemDto>, String> {
             .trim_end_matches('}')
             .parse()
             .unwrap_or(idx as u32);
-        let file_count = run_git(
-            repo,
-            &["stash", "show", "--name-only", &format!("stash@{{{index}}}")],
-            Duration::from_secs(8),
-        )
-        .ok()
-        .map(|o| {
-            lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .count() as u32
-        })
-        .unwrap_or(0);
+        let file_count = counts.get(seen).copied().unwrap_or(0);
+        seen += 1;
         items.push(StashItemDto {
             id: format!("stash-{index}"),
             index,
@@ -712,6 +947,28 @@ pub fn list_stashes(repo: &str) -> Result<Vec<StashItemDto>, String> {
         });
     }
     Ok(items)
+}
+
+fn stash_file_counts(repo: &str) -> Vec<u32> {
+    let output = match run_git(
+        repo,
+        &["log", "-g", "--name-only", "--pretty=format:%x1e", "refs/stash"],
+        Duration::from_secs(12),
+    ) {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split('\x1e')
+        .filter(|block| !block.is_empty())
+        .map(|block| {
+            block
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .count() as u32
+        })
+        .collect()
 }
 
 pub fn load_snapshot(repo: &str) -> Result<RepoSnapshot, String> {
@@ -799,36 +1056,19 @@ fn parse_hunk(
         patch_body.push_str(line);
         patch_body.push('\n');
         if line.starts_with('+') {
-            lines.push(DiffLineDto {
-                kind: "added".into(),
-                old_line_number: None,
-                new_line_number: Some(new_no),
-                old_content: None,
-                new_content: Some(line[1..].to_string()),
-            });
+            lines.push(plain_line("added", None, Some(new_no), None, Some(line[1..].to_string())));
             new_no += 1;
         } else if line.starts_with('-') {
-            lines.push(DiffLineDto {
-                kind: "deleted".into(),
-                old_line_number: Some(old_no),
-                new_line_number: None,
-                old_content: Some(line[1..].to_string()),
-                new_content: None,
-            });
+            lines.push(plain_line("deleted", Some(old_no), None, Some(line[1..].to_string()), None));
             old_no += 1;
         } else {
-            let content = line.strip_prefix(' ').unwrap_or(line);
-            lines.push(DiffLineDto {
-                kind: "unchanged".into(),
-                old_line_number: Some(old_no),
-                new_line_number: Some(new_no),
-                old_content: Some(content.to_string()),
-                new_content: Some(content.to_string()),
-            });
+            let content = line.strip_prefix(' ').unwrap_or(line).to_string();
+            lines.push(plain_line("unchanged", Some(old_no), Some(new_no), Some(content.clone()), Some(content)));
             old_no += 1;
             new_no += 1;
         }
     }
+    let lines = pair_modified_lines(lines);
     let preamble = preamble
         .lines()
         .filter(|line| !line.starts_with("index "))
@@ -856,7 +1096,155 @@ fn parse_range(token: &str) -> (u32, u32) {
     (start, count)
 }
 
+fn plain_line(
+    kind: &str,
+    old_no: Option<u32>,
+    new_no: Option<u32>,
+    old: Option<String>,
+    new: Option<String>,
+) -> DiffLineDto {
+    DiffLineDto {
+        kind: kind.into(),
+        old_line_number: old_no,
+        new_line_number: new_no,
+        old_content: old,
+        new_content: new,
+        word_diff: None,
+        old_word_diff: None,
+    }
+}
+
+fn pair_modified_lines(lines: Vec<DiffLineDto>) -> Vec<DiffLineDto> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].kind != "deleted" {
+            out.push(lines[i].clone());
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < lines.len() && lines[i].kind == "deleted" {
+            i += 1;
+        }
+        let del_end = i;
+        while i < lines.len() && lines[i].kind == "added" {
+            i += 1;
+        }
+        let add_end = i;
+        let del_count = del_end - start;
+        let add_count = add_end - del_end;
+        let paired = del_count.min(add_count);
+        for k in 0..paired {
+            let old = lines[start + k].old_content.clone().unwrap_or_default();
+            let new = lines[del_end + k].new_content.clone().unwrap_or_default();
+            let (old_spans, new_spans) = word_spans(&old, &new);
+            out.push(DiffLineDto {
+                kind: "modified".into(),
+                old_line_number: lines[start + k].old_line_number,
+                new_line_number: lines[del_end + k].new_line_number,
+                old_content: Some(old),
+                new_content: Some(new),
+                old_word_diff: Some(old_spans),
+                word_diff: Some(new_spans),
+            });
+        }
+        out.extend(lines[start + paired..del_end].iter().cloned());
+        out.extend(lines[del_end + paired..add_end].iter().cloned());
+    }
+    out
+}
+
+fn tokenize_words(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut word = false;
+    for ch in text.chars() {
+        let next_word = ch.is_alphanumeric() || ch == '_';
+        if !cur.is_empty() && next_word != word {
+            out.push(std::mem::take(&mut cur));
+        }
+        word = next_word;
+        cur.push(ch);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn coalesce_spans(spans: Vec<WordSpanDto>) -> Vec<WordSpanDto> {
+    let mut out: Vec<WordSpanDto> = Vec::new();
+    for span in spans {
+        if let Some(last) = out.last_mut() {
+            if last.kind == span.kind {
+                last.text.push_str(&span.text);
+                continue;
+            }
+        }
+        out.push(span);
+    }
+    out
+}
+
+pub fn word_spans(old: &str, new: &str) -> (Vec<WordSpanDto>, Vec<WordSpanDto>) {
+    let old_toks = tokenize_words(old);
+    let new_toks = tokenize_words(new);
+    let n = old_toks.len();
+    let m = new_toks.len();
+    if n == 0 && m == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    if n.saturating_mul(m) > 4096 {
+        return (
+            vec![WordSpanDto { kind: "del".into(), text: old.to_string() }],
+            vec![WordSpanDto { kind: "add".into(), text: new.to_string() }],
+        );
+    }
+    let mut dp = vec![vec![0u16; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if old_toks[i] == new_toks[j] {
+                dp[i + 1][j + 1].saturating_add(1)
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    let mut i = 0;
+    let mut j = 0;
+    let mut old_spans = Vec::new();
+    let mut new_spans = Vec::new();
+    while i < n && j < m {
+        if old_toks[i] == new_toks[j] {
+            old_spans.push(WordSpanDto { kind: "same".into(), text: old_toks[i].clone() });
+            new_spans.push(WordSpanDto { kind: "same".into(), text: new_toks[j].clone() });
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            old_spans.push(WordSpanDto { kind: "del".into(), text: old_toks[i].clone() });
+            i += 1;
+        } else {
+            new_spans.push(WordSpanDto { kind: "add".into(), text: new_toks[j].clone() });
+            j += 1;
+        }
+    }
+    while i < n {
+        old_spans.push(WordSpanDto { kind: "del".into(), text: old_toks[i].clone() });
+        i += 1;
+    }
+    while j < m {
+        new_spans.push(WordSpanDto { kind: "add".into(), text: new_toks[j].clone() });
+        j += 1;
+    }
+    (coalesce_spans(old_spans), coalesce_spans(new_spans))
+}
+
 pub fn file_diff(repo: &str, path: &str) -> Result<Vec<DiffChunkDto>, String> {
+    file_diff_opts(repo, path, false)
+}
+
+pub fn file_diff_opts(repo: &str, path: &str, ignore_ws: bool) -> Result<Vec<DiffChunkDto>, String> {
     let top = validate_repo(repo)?;
     let rel = safe_rel(path)?;
     let status = status_files(&top)?;
@@ -865,20 +1253,22 @@ pub fn file_diff(repo: &str, path: &str) -> Result<Vec<DiffChunkDto>, String> {
     if is_untracked {
         return Ok(untracked_chunks(&top, &rel));
     }
-    let unstaged = run_git(
-        &top,
-        &["diff", "-U3", "--", &rel],
-        Duration::from_secs(15),
-    )?;
-    let staged = run_git(
-        &top,
-        &["diff", "--cached", "-U3", "--", &rel],
-        Duration::from_secs(15),
-    )?;
+    let ws = if ignore_ws { vec!["-w"] } else { Vec::new() };
+    let mut unstaged_args = vec!["diff", "-U3"];
+    unstaged_args.extend(ws.iter().copied());
+    unstaged_args.extend(["--", rel.as_str()]);
+    let unstaged = run_git(&top, &unstaged_args, Duration::from_secs(15))?;
+    let mut staged_args = vec!["diff", "--cached", "-U3"];
+    staged_args.extend(ws.iter().copied());
+    staged_args.extend(["--", rel.as_str()]);
+    let staged = run_git(&top, &staged_args, Duration::from_secs(15))?;
     let mut chunks = split_hunks(&lossy(&unstaged.stdout), false, "u");
     chunks.extend(split_hunks(&lossy(&staged.stdout), true, "s"));
     if chunks.is_empty() {
-        let head = run_git(&top, &["diff", "-U3", "HEAD", "--", &rel], Duration::from_secs(15))?;
+        let mut head_args = vec!["diff", "-U3", "HEAD"];
+        head_args.extend(ws.iter().copied());
+        head_args.extend(["--", rel.as_str()]);
+        let head = run_git(&top, &head_args, Duration::from_secs(15))?;
         chunks = split_hunks(&lossy(&head.stdout), false, "h");
     }
     for chunk in &mut chunks {
@@ -905,13 +1295,7 @@ fn untracked_chunks(repo: &str, rel: &str) -> Vec<DiffChunkDto> {
         patch.push('+');
         patch.push_str(line);
         patch.push('\n');
-        lines.push(DiffLineDto {
-            kind: "added".into(),
-            old_line_number: None,
-            new_line_number: Some(i as u32 + 1),
-            old_content: None,
-            new_content: Some((*line).to_string()),
-        });
+        lines.push(plain_line("added", None, Some(i as u32 + 1), None, Some((*line).to_string())));
     }
     vec![DiffChunkDto {
         id: format!("new-{rel}"),
@@ -1006,6 +1390,7 @@ pub fn discard_paths(repo: &str, paths: &[String]) -> Result<(), String> {
 }
 
 fn run_git_with_stdin(cwd: &str, args: &[&str], stdin_text: &str, timeout: Duration) -> Result<Output, String> {
+    let _slot = acquire_git_slot();
     let mut cmd = git_base(cwd);
     cmd.args(args).stdin(Stdio::piped());
     let mut child = cmd
@@ -1301,18 +1686,66 @@ fn save_disk_repos(repos: &[SavedRepoDisk]) -> Result<(), String> {
     fs::write(&path, text).map_err(|err| format!("无法保存仓库列表 {}: {err}", path.display()))
 }
 
+fn repo_brief(path: &str) -> (String, u32, u32, u32) {
+    let output = run_git_global(
+        path,
+        &["--no-optional-locks"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "--branch",
+            "--untracked-files=normal",
+            "--ignore-submodules=dirty",
+        ],
+        Duration::from_secs(12),
+    );
+    let Ok(output) = output else {
+        return ("missing".into(), 0, 0, 0);
+    };
+    if !output.status.success() {
+        return ("missing".into(), 0, 0, 0);
+    }
+    parse_branch_status(&lossy(&output.stdout))
+}
+
+fn parse_branch_status(text: &str) -> (String, u32, u32, u32) {
+    let mut branch = "HEAD".to_string();
+    let mut ahead = 0u32;
+    let mut behind = 0u32;
+    let mut dirty = 0u32;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            let name = rest.split("...").next().unwrap_or(rest);
+            let name = name.split(' ').next().unwrap_or(name).trim();
+            branch = if name.is_empty() {
+                "HEAD".to_string()
+            } else {
+                name.to_string()
+            };
+            if let Some(start) = rest.find('[') {
+                if let Some(end) = rest[start..].find(']') {
+                    for part in rest[start + 1..start + end].split(',') {
+                        let part = part.trim();
+                        if let Some(n) = part.strip_prefix("ahead ") {
+                            ahead = n.parse().unwrap_or(0);
+                        } else if let Some(n) = part.strip_prefix("behind ") {
+                            behind = n.parse().unwrap_or(0);
+                        }
+                    }
+                }
+            }
+        } else if !line.trim().is_empty() {
+            dirty += 1;
+        }
+    }
+    (branch, dirty, ahead, behind)
+}
+
 pub fn list_saved_repos() -> Vec<SavedRepoDto> {
     load_disk_repos()
         .into_iter()
         .map(|r| {
-            let (branch, dirty, ahead, behind) = if validate_repo(&r.path).is_ok() {
-                let branch = current_branch(&r.path).map(|b| b.0).unwrap_or_else(|_| "?".into());
-                let dirty = status_files(&r.path).map(|f| f.len() as u32).unwrap_or(0);
-                let (ahead, behind) = ahead_behind(&r.path);
-                (branch, dirty, ahead, behind)
-            } else {
-                ("missing".into(), 0, 0, 0)
-            };
+            let (branch, dirty, ahead, behind) = repo_brief(&r.path);
             SavedRepoDto {
                 id: r.id,
                 name: r.name,
@@ -1332,34 +1765,47 @@ pub fn add_saved_repo(name: &str, path: &str) -> Result<SavedRepoDto, String> {
     let top = validate_repo(path)?;
     let mut repos = load_disk_repos();
     let id = repo_id(&top);
+    let display_name;
+    let is_favorite;
     if let Some(existing) = repos.iter_mut().find(|r| r.id == id) {
         existing.last_opened = "刚刚".into();
+        existing.path = top.clone();
         if !name.trim().is_empty() {
             existing.name = name.trim().to_string();
         }
-        save_disk_repos(&repos)?;
+        display_name = existing.name.clone();
+        is_favorite = existing.is_favorite;
     } else {
-        let display = if name.trim().is_empty() {
+        display_name = if name.trim().is_empty() {
             filename_of(&top)
         } else {
             name.trim().to_string()
         };
+        is_favorite = false;
         repos.insert(
             0,
             SavedRepoDisk {
                 id: id.clone(),
-                name: display,
+                name: display_name.clone(),
                 path: top.clone(),
                 is_favorite: false,
                 last_opened: "刚刚".into(),
             },
         );
-        save_disk_repos(&repos)?;
     }
-    list_saved_repos()
-        .into_iter()
-        .find(|r| r.id == id)
-        .ok_or_else(|| "保存仓库失败".into())
+    save_disk_repos(&repos)?;
+    // 分支和脏文件由随后的快照填充，这里不再把每个已保存仓库都扫一遍。
+    Ok(SavedRepoDto {
+        id,
+        name: display_name,
+        path: top,
+        current_branch: String::new(),
+        ahead_count: 0,
+        behind_count: 0,
+        dirty_files_count: 0,
+        is_favorite,
+        last_opened: "刚刚".into(),
+    })
 }
 
 pub fn remove_saved_repo(id: &str) -> Result<Vec<SavedRepoDto>, String> {
@@ -1470,6 +1916,10 @@ pub fn create_shelf(repo: &str, name: &str, paths: &[String]) -> Result<ShelfIte
     let raw = serde_json::to_string_pretty(&disk).map_err(|e| e.to_string())?;
     let shelf_path = shelf_dir(&top)?.join(format!("{id}.json"));
     fs::write(&shelf_path, raw).map_err(|e| format!("写入架藏失败（{}）：{e}", shelf_path.display()))?;
+    // IDEA 的 Shelf 会把变更从工作区移走，避免和架藏各留一份。
+    discard_paths(&top, &rels).map_err(|err| {
+        format!("架藏已保存，但从工作区移出失败：{err}")
+    })?;
     Ok(ShelfItemDto {
         id,
         name: disk.name,
@@ -1538,9 +1988,586 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     (y as i32, m as u32, d as u32)
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionFileDto {
+    pub path: String,
+    pub status: String,
+    pub additions: i32,
+    pub deletions: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchFileDto {
+    pub path: String,
+    pub status: String,
+    pub additions: i32,
+    pub deletions: i32,
+    pub chunks: Vec<DiffChunkDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictViewDto {
+    pub path: String,
+    pub ours: String,
+    pub theirs: String,
+    pub base: String,
+    pub working: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMetaDto {
+    pub encoding: String,
+    pub line_ending: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct BranchFavDisk {
+    repos: std::collections::HashMap<String, Vec<String>>,
+}
+
+fn branch_fav_path() -> Result<PathBuf, String> {
+    Ok(writable_data_dir()?.join("branch-favorites.json"))
+}
+
+fn load_branch_favs() -> BranchFavDisk {
+    let Ok(path) = branch_fav_path() else {
+        return BranchFavDisk::default();
+    };
+    serde_json::from_str(&fs::read_to_string(path).unwrap_or_default()).unwrap_or_default()
+}
+
+fn favorite_branch_names(repo: &str) -> Vec<String> {
+    let id = repo_id(repo);
+    load_branch_favs().repos.get(&id).cloned().unwrap_or_default()
+}
+
+pub fn toggle_favorite_branch(repo: &str, name: &str) -> Result<(), String> {
+    let top = validate_repo(repo)?;
+    validate_branch_name(name)?;
+    let id = repo_id(&top);
+    let mut disk = load_branch_favs();
+    let names = disk.repos.entry(id).or_default();
+    if let Some(pos) = names.iter().position(|item| item == name) {
+        names.remove(pos);
+    } else {
+        names.push(name.to_string());
+    }
+    let path = branch_fav_path()?;
+    let text = serde_json::to_string_pretty(&disk).map_err(|err| err.to_string())?;
+    fs::write(path, text).map_err(|err| format!("无法保存分支收藏：{err}"))?;
+    Ok(())
+}
+
+fn validate_branch_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.starts_with('-')
+        || name.ends_with('/')
+        || name.contains("..")
+        || name.chars().any(|ch| matches!(ch, ' ' | '\n' | '\0' | '\\'))
+    {
+        return Err(format!("无效的分支名：{name}"));
+    }
+    Ok(())
+}
+
+fn validate_rev(spec: &str) -> Result<(), String> {
+    if spec.is_empty() || spec.starts_with('-') || spec.chars().any(|ch| ch == '\n' || ch == '\0') {
+        return Err("无效的修订版本".into());
+    }
+    Ok(())
+}
+
+pub fn fetch_repo(repo: &str) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    let output = run_git(&top, &["fetch", "--prune", "--all"], Duration::from_secs(60))?;
+    if output.status.success() {
+        let text = lossy(&output.stderr);
+        let text = if text.trim().is_empty() { lossy(&output.stdout) } else { text };
+        return Ok(text.lines().find(|line| !line.trim().is_empty()).unwrap_or("远程引用已更新").to_string());
+    }
+    let msg = lossy(&output.stderr);
+    if msg.to_ascii_lowercase().contains("no remote") {
+        return Err("没有配置远程仓库".into());
+    }
+    Err(if msg.trim().is_empty() { "刷新远程引用失败".into() } else { msg })
+}
+
+fn pick_save_path(default_name: &str) -> Result<Option<String>, String> {
+    let safe = default_name.replace('\\', "").replace('\'', "");
+    let script = format!(
+        r#"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+$d = New-Object System.Windows.Forms.SaveFileDialog
+$d.Filter = 'Patch (*.patch)|*.patch|All files (*.*)|*.*'
+$d.FileName = '{safe}'
+$d.OverwritePrompt = $true
+if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $d.FileName }}
+"#
+    );
+    let output = hidden_command("powershell")
+        .args(["-STA", "-NoProfile", "-Command", &script])
+        .output()
+        .map_err(|err| format!("无法打开保存对话框：{err}"))?;
+    let path = lossy(&output.stdout);
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(path.lines().next().unwrap_or("").trim().to_string()))
+    }
+}
+
+pub fn create_patch(repo: &str, paths: &[String]) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    let rels: Vec<String> = paths.iter().map(|p| safe_rel(p)).collect::<Result<_, _>>()?;
+    let status = status_files(&top)?;
+    let selected: Vec<&FileChangeDto> = if rels.is_empty() {
+        status.iter().collect()
+    } else {
+        status.iter().filter(|file| rels.iter().any(|p| p == &file.path.replace('\\', "/"))).collect()
+    };
+    if selected.is_empty() {
+        return Err("没有可导出的变更".into());
+    }
+    let mut text = String::new();
+    let tracked: Vec<String> = selected.iter().filter(|f| f.status != "untracked").map(|f| f.path.clone()).collect();
+    if !tracked.is_empty() {
+        let mut args = vec!["diff".to_string(), "HEAD".to_string(), "--".to_string()];
+        args.extend(tracked);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = run_git(&top, &refs, Duration::from_secs(20))?;
+        if !output.status.success() && output.stdout.is_empty() {
+            return Err(lossy(&output.stderr));
+        }
+        text.push_str(&lossy(&output.stdout));
+    }
+    for file in selected.iter().filter(|f| f.status == "untracked") {
+        for chunk in untracked_chunks(&top, &file.path) {
+            text.push_str(&chunk.raw_patch);
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+    }
+    if text.trim().is_empty() {
+        return Err("没有可导出的文本差异".into());
+    }
+    let Some(dest) = pick_save_path("easy-git.patch")? else {
+        return Ok("已取消".into());
+    };
+    fs::write(&dest, text).map_err(|err| format!("写入补丁失败：{err}"))?;
+    Ok(format!("已保存 {dest}"))
+}
+
+fn collect_revision_files(name_status: &str, numstat: &str) -> Vec<RevisionFileDto> {
+    let mut files = Vec::new();
+    for line in name_status.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("commit ") {
+            continue;
+        }
+        let mut cols = line.split('\t');
+        let code = cols.next().unwrap_or("");
+        let path = cols.next().unwrap_or("");
+        let renamed = cols.next().unwrap_or("");
+        let display = if renamed.is_empty() { path } else { renamed };
+        if display.is_empty() {
+            continue;
+        }
+        let status = match code.chars().next().unwrap_or('M') {
+            'A' => "added",
+            'D' => "deleted",
+            'U' => "conflict",
+            _ => "modified",
+        };
+        files.push(RevisionFileDto {
+            path: display.replace('\\', "/"),
+            status: status.into(),
+            additions: 0,
+            deletions: 0,
+        });
+    }
+    for line in numstat.lines() {
+        let line = line.trim();
+        if line.is_empty() || !line.contains('\t') {
+            continue;
+        }
+        let mut cols = line.split('\t');
+        let additions = cols.next().unwrap_or("0").parse::<i32>().unwrap_or(0);
+        let deletions = cols.next().unwrap_or("0").parse::<i32>().unwrap_or(0);
+        let path = cols.next().unwrap_or("").replace('\\', "/");
+        if let Some(file) = files.iter_mut().find(|file| file.path == path || numstat_matches(&file.path, &path)) {
+            file.additions = additions;
+            file.deletions = deletions;
+        }
+    }
+    files
+}
+
+pub fn list_revision_files(repo: &str, spec: &str, mode: &str) -> Result<Vec<RevisionFileDto>, String> {
+    let top = validate_repo(repo)?;
+    validate_rev(spec)?;
+    let (names, stats) = match mode {
+        "commit" => (
+            run_git(&top, &["show", "--name-status", "--pretty=format:", spec], Duration::from_secs(20))?,
+            run_git(&top, &["show", "--numstat", "--pretty=format:", spec], Duration::from_secs(20))?,
+        ),
+        "worktree" | "range" => (
+            run_git(&top, &["diff", "--name-status", spec], Duration::from_secs(20))?,
+            run_git(&top, &["diff", "--numstat", spec], Duration::from_secs(20))?,
+        ),
+        _ => return Err("未知对比模式".into()),
+    };
+    if !names.status.success() {
+        return Err(lossy(&names.stderr));
+    }
+    Ok(collect_revision_files(&lossy(&names.stdout), &lossy(&stats.stdout)))
+}
+
+pub fn load_revision_diff(repo: &str, spec: &str, path: &str, mode: &str, ignore_ws: bool) -> Result<Vec<DiffChunkDto>, String> {
+    let top = validate_repo(repo)?;
+    validate_rev(spec)?;
+    let rel = safe_rel(path)?;
+    let args: Vec<String> = match mode {
+        "commit" if ignore_ws => vec!["diff".into(), "-U3".into(), "-w".into(), format!("{spec}^"), spec.into(), "--".into(), rel],
+        "commit" => vec!["show".into(), "-U3".into(), "--format=".into(), spec.into(), "--".into(), rel],
+        "worktree" | "range" => {
+            let mut args = vec!["diff".into(), "-U3".into()];
+            if ignore_ws {
+                args.push("-w".into());
+            }
+            args.push(spec.into());
+            args.push("--".into());
+            args.push(rel);
+            args
+        }
+        _ => return Err("未知对比模式".into()),
+    };
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = run_git(&top, &refs, Duration::from_secs(20))?;
+    let text = lossy(&output.stdout);
+    if text.is_empty() && !output.status.success() {
+        return Err(lossy(&output.stderr));
+    }
+    let mut chunks = split_hunks(&text, false, "rev");
+    for chunk in &mut chunks {
+        if chunk.lines.len() > 800 {
+            chunk.lines.truncate(800);
+        }
+    }
+    Ok(chunks)
+}
+
+fn split_diff_blocks(diff_text: &str) -> Vec<&str> {
+    let Some(start) = diff_text.find("diff --git ") else {
+        return if diff_text.contains("@@") { vec![diff_text] } else { Vec::new() };
+    };
+    let text = &diff_text[start..];
+    let mut blocks = Vec::new();
+    let mut offset = 0;
+    while let Some(rel) = text[offset..].find("diff --git ") {
+        let abs = offset + rel;
+        if let Some(next) = text[abs + 1..].find("\ndiff --git ") {
+            let end = abs + 1 + next;
+            blocks.push(&text[abs..end]);
+            offset = end + 1;
+        } else {
+            blocks.push(&text[abs..]);
+            break;
+        }
+    }
+    blocks
+}
+
+fn patch_path(block: &str) -> Option<String> {
+    for line in block.lines() {
+        if let Some(rest) = line.strip_prefix("+++ b/") {
+            if rest != "/dev/null" {
+                return Some(rest.to_string());
+            }
+        }
+    }
+    for line in block.lines() {
+        if let Some(rest) = line.strip_prefix("--- a/") {
+            if rest != "/dev/null" {
+                return Some(rest.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn patch_to_files(diff_text: &str) -> Vec<PatchFileDto> {
+    split_diff_blocks(diff_text)
+        .into_iter()
+        .filter_map(|block| {
+            let path = patch_path(block)?;
+            let chunks = split_hunks(block, false, "patch");
+            let additions = chunks.iter().flat_map(|c| c.lines.iter()).filter(|l| l.kind != "deleted" && l.kind != "unchanged").count() as i32;
+            let deletions = chunks.iter().flat_map(|c| c.lines.iter()).filter(|l| l.kind != "added" && l.kind != "unchanged").count() as i32;
+            let status = if block.contains("new file mode") {
+                "added"
+            } else if block.contains("deleted file mode") {
+                "deleted"
+            } else {
+                "modified"
+            };
+            Some(PatchFileDto {
+                path,
+                status: status.into(),
+                additions,
+                deletions,
+                chunks,
+            })
+        })
+        .collect()
+}
+
+fn new_file_patch(path: &str, content: &str) -> PatchFileDto {
+    let lines: Vec<&str> = content.lines().take(300).collect();
+    let count = lines.len() as u32;
+    let mut dto_lines = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        dto_lines.push(plain_line("added", None, Some(i as u32 + 1), None, Some((*line).to_string())));
+    }
+    let chunk = DiffChunkDto {
+        id: format!("shelf-new-{path}"),
+        old_start: 0,
+        old_lines: 0,
+        new_start: 1,
+        new_lines: count,
+        is_staged: false,
+        lines: dto_lines,
+        raw_patch: String::new(),
+    };
+    PatchFileDto {
+        path: path.into(),
+        status: "added".into(),
+        additions: count as i32,
+        deletions: 0,
+        chunks: vec![chunk],
+    }
+}
+
+pub fn shelf_patch_files(repo: &str, id: &str) -> Result<Vec<PatchFileDto>, String> {
+    let top = validate_repo(repo)?;
+    if id.is_empty() || id.chars().any(|ch| matches!(ch, '/' | '\\' | '.')) {
+        return Err("无效的架藏编号".into());
+    }
+    let path = shelf_dir(&top)?.join(format!("{id}.json"));
+    let raw = fs::read_to_string(&path).map_err(|_| "找不到架藏".to_string())?;
+    let disk: ShelfDisk = serde_json::from_str(&raw).map_err(|err| err.to_string())?;
+    let mut files = patch_to_files(&disk.patch);
+    for file in &disk.new_files {
+        if files.iter().any(|item| item.path == file.path) {
+            continue;
+        }
+        files.push(new_file_patch(&file.path, &file.content));
+    }
+    Ok(files)
+}
+
+pub fn stash_patch_files(repo: &str, index: u32) -> Result<Vec<PatchFileDto>, String> {
+    let top = validate_repo(repo)?;
+    let spec = format!("stash@{{{index}}}");
+    let output = run_git(&top, &["stash", "show", "-p", "--include-untracked", &spec], Duration::from_secs(20))?;
+    let text = if output.status.success() {
+        lossy(&output.stdout)
+    } else {
+        let fallback = run_git(&top, &["stash", "show", "-p", &spec], Duration::from_secs(20))?;
+        ensure_ok(&fallback, "读取贮藏差异")?
+    };
+    Ok(patch_to_files(&text))
+}
+
+pub fn delete_branch(repo: &str, name: &str, remote: bool, force: bool) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    validate_branch_name(name)?;
+    if remote {
+        let (remote_name, branch) = name.split_once('/').ok_or_else(|| "远程分支名无效".to_string())?;
+        let output = run_git(&top, &["push", remote_name, "--delete", branch], Duration::from_secs(60))?;
+        return ensure_ok(&output, "删除远程分支");
+    }
+    let (current, _) = current_branch(&top)?;
+    if name == current {
+        return Err("不能删除当前分支".into());
+    }
+    let flag = if force { "-D" } else { "-d" };
+    let output = run_git(&top, &["branch", flag, "--", name], Duration::from_secs(15))?;
+    ensure_ok(&output, "删除分支")
+}
+
+pub fn rename_branch(repo: &str, old: &str, new: &str) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    validate_branch_name(old)?;
+    validate_branch_name(new)?;
+    let output = run_git(&top, &["branch", "-m", "--", old, new], Duration::from_secs(15))?;
+    ensure_ok(&output, "重命名分支")
+}
+
+fn show_stage(repo: &str, stage: u8, rel: &str) -> String {
+    let spec = format!(":{stage}:{rel}");
+    match run_git(repo, &["show", &spec], Duration::from_secs(12)) {
+        Ok(output) if output.status.success() => lossy(&output.stdout),
+        _ => String::new(),
+    }
+}
+
+pub fn load_conflict(repo: &str, path: &str) -> Result<ConflictViewDto, String> {
+    let top = validate_repo(repo)?;
+    let rel = safe_rel(path)?;
+    let working = fs::read(Path::new(&top).join(&rel))
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default();
+    Ok(ConflictViewDto {
+        path: rel.clone(),
+        ours: show_stage(&top, 2, &rel),
+        theirs: show_stage(&top, 3, &rel),
+        base: show_stage(&top, 1, &rel),
+        working,
+    })
+}
+
+pub fn resolve_conflict(repo: &str, path: &str, content: &str) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    let rel = safe_rel(path)?;
+    let full = Path::new(&top).join(&rel);
+    if let Some(parent) = full.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    fs::write(&full, content).map_err(|err| format!("写入合并结果失败：{err}"))?;
+    let output = run_git(&top, &["add", "--", &rel], Duration::from_secs(15))?;
+    ensure_ok(&output, "标记冲突已解决")?;
+    Ok("已写入并标记为已解决".into())
+}
+
+pub fn smart_merge_conflict(repo: &str, path: &str) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    let rel = safe_rel(path)?;
+    let view = load_conflict(&top, &rel)?;
+    if view.ours.is_empty() && view.theirs.is_empty() {
+        return Ok(view.working);
+    }
+    let dir = std::env::temp_dir().join(format!("easy-git-merge-{}", std::process::id()));
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    let base = dir.join("base");
+    let ours = dir.join("ours");
+    let theirs = dir.join("theirs");
+    fs::write(&base, view.base.as_bytes()).map_err(|err| err.to_string())?;
+    fs::write(&ours, view.ours.as_bytes()).map_err(|err| err.to_string())?;
+    fs::write(&theirs, view.theirs.as_bytes()).map_err(|err| err.to_string())?;
+    let output = run_git(
+        &top,
+        &[
+            "merge-file",
+            "-p",
+            ours.to_str().unwrap_or(""),
+            base.to_str().unwrap_or(""),
+            theirs.to_str().unwrap_or(""),
+        ],
+        Duration::from_secs(15),
+    )?;
+    let text = lossy(&output.stdout);
+    if text.is_empty() && !output.status.success() {
+        let err = lossy(&output.stderr);
+        return Err(if err.trim().is_empty() { "智能合并失败".into() } else { err });
+    }
+    Ok(text)
+}
+
+pub fn inspect_file(repo: &str, path: &str) -> Result<FileMetaDto, String> {
+    let top = validate_repo(repo)?;
+    let rel = safe_rel(path)?;
+    let bytes = fs::read(Path::new(&top).join(rel)).unwrap_or_default();
+    let encoding = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        "UTF-8 BOM"
+    } else if bytes.starts_with(&[0xFF, 0xFE]) {
+        "UTF-16 LE"
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        "UTF-16 BE"
+    } else if bytes.is_empty() || std::str::from_utf8(&bytes).is_ok() {
+        "UTF-8"
+    } else {
+        "未知"
+    };
+    let crlf = bytes.windows(2).filter(|pair| *pair == b"\r\n").count();
+    let lf = bytes.iter().filter(|byte| **byte == b'\n').count();
+    let lone_lf = lf.saturating_sub(crlf);
+    let line_ending = if crlf > 0 && lone_lf > 0 {
+        "混合"
+    } else if crlf > 0 {
+        "CRLF"
+    } else if lone_lf > 0 {
+        "LF"
+    } else {
+        "—"
+    };
+    Ok(FileMetaDto {
+        encoding: encoding.into(),
+        line_ending: line_ending.into(),
+    })
+}
+
+pub fn process_memory_mb() -> u32 {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct Counters {
+            cb: u32,
+            page_fault_count: u32,
+            peak_working_set_size: usize,
+            working_set_size: usize,
+            quota_peak_paged_pool_usage: usize,
+            quota_paged_pool_usage: usize,
+            quota_peak_non_paged_pool_usage: usize,
+            quota_non_paged_pool_usage: usize,
+            pagefile_usage: usize,
+            peak_pagefile_usage: usize,
+        }
+        extern "system" {
+            fn GetCurrentProcess() -> *mut core::ffi::c_void;
+            fn K32GetProcessMemoryInfo(process: *mut core::ffi::c_void, counters: *mut Counters, cb: u32) -> i32;
+        }
+        unsafe {
+            let mut pmc: Counters = std::mem::zeroed();
+            pmc.cb = std::mem::size_of::<Counters>() as u32;
+            if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) != 0 {
+                return (pmc.working_set_size / (1024 * 1024)) as u32;
+            }
+        }
+    }
+    0
+}
+
+pub fn reveal_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("路径为空".into());
+    }
+    hidden_command("explorer")
+        .arg(path)
+        .spawn()
+        .map_err(|err| format!("无法打开资源管理器：{err}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_status_keeps_dots_in_branch_names() {
+        let (branch, dirty, ahead, behind) = parse_branch_status(
+            "## release/1.2...origin/release/1.2 [ahead 2, behind 1]\n M src/a.ts\n?? new.txt\n",
+        );
+        assert_eq!(branch, "release/1.2");
+        assert_eq!((dirty, ahead, behind), (2, 2, 1));
+        let (detached, _, _, _) = parse_branch_status("## HEAD (no branch)\n");
+        assert_eq!(detached, "HEAD");
+    }
 
     fn temp_repo() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("easy-git-test-{}", std::process::id()));
@@ -1574,6 +2601,7 @@ mod tests {
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].subject, "init");
         assert!(log[0].refs.iter().any(|r| r.contains("main")));
+        assert!(log[0].files.iter().any(|f| f.additions > 0), "commit file stats should come from numstat");
 
         fs::write(dir.join("a.txt"), "hello\nchanged\n").unwrap();
         let diff = file_diff(&path, "a.txt").unwrap();
@@ -1590,6 +2618,12 @@ mod tests {
 
         let shelf = create_shelf(&path, "smoke", &["a.txt".into()]).unwrap();
         assert_eq!(shelf.file_count, 1);
+        assert!(
+            status_files(&path).unwrap().iter().all(|f| f.path != "a.txt"),
+            "shelving should move the change out of the worktree"
+        );
+        let shelf_diff = shelf_patch_files(&path, &shelf.id).unwrap();
+        assert!(!shelf_diff.is_empty(), "shelf should keep a readable patch");
         delete_shelf(&path, &shelf.id).unwrap();
 
         create_branch(&path, "feature-smoke", None).unwrap();
@@ -1640,6 +2674,13 @@ mod tests {
         discard_paths(&path, &["new.txt".into()]).unwrap();
         assert!(!dir.join("new.txt").exists(), "untracked file should leave the worktree");
 
+        rename_branch(&path, "feature-smoke", "feature-renamed").unwrap();
+        run_git(&path, &["switch", "-f", "main"], Duration::from_secs(15)).unwrap();
+        delete_branch(&path, "feature-renamed", false, true).unwrap();
+        let (old_spans, new_spans) = word_spans("hello world", "hello EasyGit");
+        assert!(old_spans.iter().any(|span| span.kind == "del" && span.text.contains("world")));
+        assert!(new_spans.iter().any(|span| span.kind == "add" && span.text.contains("EasyGit")));
+
         let _ = fs::remove_dir_all(&dir);
     }
 }
@@ -1653,9 +2694,8 @@ $d.Description = '选择 Git 仓库目录'
 $d.ShowNewFolderButton = $false
 if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }
 "#;
-    let output = Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-STA", "-NoProfile", "-Command", script])
-        .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("无法打开目录选择器：{e}"))?;
     let path = lossy(&output.stdout);

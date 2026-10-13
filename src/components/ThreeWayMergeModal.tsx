@@ -1,177 +1,142 @@
-import React, { useState } from 'react';
-import { 
-  GitMerge, 
-  Check, 
-  ArrowLeft, 
-  ArrowRight, 
-  Sparkles, 
-  Save, 
-  X,
-  FileCode,
-  ShieldCheck 
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { GitMerge, ArrowLeft, ArrowRight, Sparkles, Save, X, ShieldCheck } from 'lucide-react';
+
+export interface ConflictFileRef {
+  path: string;
+}
 
 interface ThreeWayMergeModalProps {
   isOpen: boolean;
+  embedded?: boolean;
+  files: ConflictFileRef[];
+  activePath?: string;
+  ours: string;
+  theirs: string;
+  result: string;
+  onSelectFile: (path: string) => void;
+  onResultChange: (value: string) => void;
+  onAcceptLeft: () => void;
+  onAcceptRight: () => void;
+  onSmartMerge: () => void;
+  onSave: () => void;
   onClose: () => void;
-  filePath?: string;
-  onResolved: () => void;
 }
 
 export const ThreeWayMergeModal: React.FC<ThreeWayMergeModalProps> = ({
   isOpen,
+  embedded = false,
+  files,
+  activePath,
+  ours,
+  theirs,
+  result,
+  onSelectFile,
+  onResultChange,
+  onAcceptLeft,
+  onAcceptRight,
+  onSmartMerge,
+  onSave,
   onClose,
-  filePath = 'src/auth/tokenManager.ts',
-  onResolved,
 }) => {
-  if (!isOpen) return null;
+  const [localResult, setLocalResult] = useState(result);
+  useEffect(() => setLocalResult(result), [result, activePath]);
 
-  const [mergedContent, setMergedContent] = useState<string>(`export async function refreshJwtToken(token: string): Promise<TokenResult> {
-  // 合并方案：同时保留本地性能监控指标与远程最新的重试安全机制
-  const metrics = startMetricsTimer();
-  const res = await fetchWithRetry('/api/auth/refresh', {
-    headers: { 'Authorization': \`Bearer \${token}\` },
-    timeout: 5000,
-  });
-  metrics.recordSuccess();
-  return res.json();
-}`);
+  if (!isOpen && !embedded) return null;
 
-  const leftYourVersion = `export async function refreshJwtToken(token: string): Promise<TokenResult> {
-  // 本地修改：添加本地性能监控指标记录
-  const metrics = startMetricsTimer();
-  const res = await fetch('/api/auth/refresh', {
-    headers: { 'Authorization': \`Bearer \${token}\` },
-  });
-  metrics.recordSuccess();
-  return res.json();
-}`;
-
-  const rightTheirVersion = `export async function refreshJwtToken(token: string): Promise<TokenResult> {
-  // 远程修改：接入重试机制与超时保护
-  const res = await fetchWithRetry('/api/auth/refresh', {
-    headers: { 'Authorization': \`Bearer \${token}\` },
-    timeout: 5000,
-  });
-  return res.json();
-}`;
-
-  const handleApplyLeft = () => {
-    setMergedContent(leftYourVersion);
-  };
-
-  const handleApplyRight = () => {
-    setMergedContent(rightTheirVersion);
-  };
-
-  const handleApplySmart = () => {
-    setMergedContent(`export async function refreshJwtToken(token: string): Promise<TokenResult> {
-  // 智能合并结果：合并本地监控与远程安全重试策略
-  const metrics = startMetricsTimer();
-  const res = await fetchWithRetry('/api/auth/refresh', {
-    headers: { 'Authorization': \`Bearer \${token}\` },
-    timeout: 5000,
-  });
-  metrics.recordSuccess();
-  return res.json();
-}`);
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px] select-none text-xs">
-      <div className="w-[95vw] max-w-6xl h-[85vh] bg-jb-panel border border-jb-border rounded-lg shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-        {/* 顶部标题与合并动作 */}
-        <div className="h-11 px-4 border-b border-jb-border flex items-center justify-between bg-jb-panel">
-          <div className="flex items-center space-x-2">
-            <GitMerge className="w-4 h-4 text-purple-400" />
-            <span className="font-semibold text-sm text-jb-text-primary">Resolve Conflicts</span>
-            <span className="text-jb-text-muted font-mono">({filePath})</span>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            {/* 一键智能合并 */}
-            <button
-              onClick={handleApplySmart}
-              className="px-2.5 py-1.5 rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 font-medium flex items-center space-x-1.5 transition-colors"
-              title="自动应用所有无冲突变更"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-purple-300" />
-              <span>Apply All Non-Conflicting Changes</span>
-            </button>
-
-            <button
-              onClick={() => {
-                onResolved();
-                onClose();
-              }}
-              className="px-3 py-1.5 rounded bg-jb-blue hover:bg-jb-blueHover text-white font-medium flex items-center space-x-1.5 transition-colors shadow-sm"
-            >
-              <Save className="w-3.5 h-3.5" />
-              <span>Save and Mark Resolved</span>
-            </button>
-
-            <button 
-              onClick={onClose}
-              className="p-1 rounded hover:bg-jb-hover text-jb-text-muted hover:text-jb-text-primary"
-            >
+  const body = (
+    <div className={embedded ? 'flex-1 flex flex-col h-full bg-jb-panel overflow-hidden' : 'w-[95vw] max-w-6xl h-[85vh] bg-jb-panel border border-jb-border rounded-lg shadow-2xl flex flex-col overflow-hidden'}>
+      <div className="h-11 px-4 border-b border-jb-border flex items-center justify-between">
+        <div className="flex items-center space-x-2 min-w-0">
+          <GitMerge className="w-4 h-4 text-purple-400 shrink-0" />
+          <span className="font-semibold text-sm">Resolve Conflicts</span>
+          <span className="text-jb-text-muted font-mono truncate">{activePath || '没有冲突文件'}</span>
+        </div>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={onSmartMerge}
+            disabled={!activePath}
+            className="px-2.5 py-1.5 rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 font-medium flex items-center space-x-1.5 disabled:opacity-40"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Apply All Non-Conflicting</span>
+          </button>
+          <button
+            onClick={() => {
+              onResultChange(localResult);
+              onSave();
+            }}
+            disabled={!activePath}
+            className="px-3 py-1.5 rounded bg-jb-blue hover:bg-jb-blueHover text-white font-medium flex items-center space-x-1.5 disabled:opacity-40"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>Save and Mark Resolved</span>
+          </button>
+          {!embedded && (
+            <button onClick={onClose} className="p-1 rounded hover:bg-jb-hover text-jb-text-muted">
               <X className="w-4 h-4" />
             </button>
-          </div>
-        </div>
-
-        {/* 三栏布局 */}
-        <div className="flex-1 grid grid-cols-3 divide-x divide-jb-border overflow-hidden font-mono text-xs">
-          {/* 左栏：Your Version */}
-          <div className="flex flex-col bg-jb-bg/50 overflow-hidden">
-            <div className="h-8 px-3 border-b border-jb-border bg-jb-panel/80 flex items-center justify-between font-sans">
-              <span className="font-semibold text-jb-blue">Your Version (Local)</span>
-              <button
-                onClick={handleApplyLeft}
-                className="px-2 py-0.5 rounded bg-jb-blue/20 hover:bg-jb-blue/30 text-jb-blue flex items-center space-x-1 text-[11px]"
-              >
-                <span>Accept Left</span>
-                <ArrowRight className="w-3 h-3" />
-              </button>
-            </div>
-            <pre className="p-3 text-jb-text-code whitespace-pre-wrap overflow-y-auto flex-1 font-mono leading-relaxed bg-blue-950/10">
-              {leftYourVersion}
-            </pre>
-          </div>
-
-          {/* 中栏：Result 最终合并代码 */}
-          <div className="flex flex-col bg-jb-bg overflow-hidden ring-1 ring-jb-border">
-            <div className="h-8 px-3 border-b border-jb-border bg-jb-panel/90 flex items-center justify-between font-sans">
-              <div className="flex items-center space-x-1.5 font-semibold text-emerald-400">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Result (Merged Output)</span>
-              </div>
-              <span className="text-[10px] text-jb-text-muted">可直接编辑</span>
-            </div>
-            <textarea
-              value={mergedContent}
-              onChange={(e) => setMergedContent(e.target.value)}
-              className="w-full flex-1 p-3 bg-jb-bg text-jb-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-jb-blue/40"
-            />
-          </div>
-
-          {/* 右栏：Their Version */}
-          <div className="flex flex-col bg-jb-bg/50 overflow-hidden">
-            <div className="h-8 px-3 border-b border-jb-border bg-jb-panel/80 flex items-center justify-between font-sans">
-              <button
-                onClick={handleApplyRight}
-                className="px-2 py-0.5 rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 flex items-center space-x-1 text-[11px]"
-              >
-                <ArrowLeft className="w-3 h-3" />
-                <span>Accept Right</span>
-              </button>
-              <span className="font-semibold text-purple-400">Their Version (Incoming)</span>
-            </div>
-            <pre className="p-3 text-jb-text-code whitespace-pre-wrap overflow-y-auto flex-1 font-mono leading-relaxed bg-purple-950/10">
-              {rightTheirVersion}
-            </pre>
-          </div>
+          )}
         </div>
       </div>
+
+      {files.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-sm text-jb-text-muted">
+          当前仓库没有未解决的冲突。合并或变基产生冲突后，这里会打开对应文件。
+        </div>
+      ) : (
+        <div className="flex-1 flex min-h-0">
+          <div className="w-56 border-r border-jb-border overflow-auto p-1 text-xs">
+            {files.map(file => (
+              <button
+                key={file.path}
+                onClick={() => onSelectFile(file.path)}
+                className={`w-full text-left px-2 py-1.5 rounded font-mono truncate ${file.path === activePath ? 'bg-jb-selected text-white' : 'hover:bg-jb-hover text-rose-300'}`}
+              >
+                {file.path}
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 grid grid-cols-3 divide-x divide-jb-border overflow-hidden font-mono text-xs">
+            <div className="flex flex-col bg-jb-bg/50 overflow-hidden">
+              <div className="h-8 px-3 border-b border-jb-border flex items-center justify-between font-sans">
+                <span className="font-semibold text-jb-blue">Your Version</span>
+                <button onClick={onAcceptLeft} className="px-2 py-0.5 rounded bg-jb-blue/20 text-jb-blue flex items-center space-x-1 text-[11px]">
+                  <span>Accept Left</span>
+                  <ArrowRight className="w-3 h-3" />
+                </button>
+              </div>
+              <pre className="p-3 whitespace-pre-wrap overflow-y-auto flex-1 leading-relaxed">{ours || '（空）'}</pre>
+            </div>
+            <div className="flex flex-col bg-jb-bg overflow-hidden">
+              <div className="h-8 px-3 border-b border-jb-border flex items-center space-x-1.5 font-sans font-semibold text-emerald-400">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Result</span>
+              </div>
+              <textarea
+                value={localResult}
+                onChange={(e) => {
+                  setLocalResult(e.target.value);
+                  onResultChange(e.target.value);
+                }}
+                className="w-full flex-1 p-3 bg-jb-bg text-jb-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none"
+              />
+            </div>
+            <div className="flex flex-col bg-jb-bg/50 overflow-hidden">
+              <div className="h-8 px-3 border-b border-jb-border flex items-center justify-between font-sans">
+                <button onClick={onAcceptRight} className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 flex items-center space-x-1 text-[11px]">
+                  <ArrowLeft className="w-3 h-3" />
+                  <span>Accept Right</span>
+                </button>
+                <span className="font-semibold text-purple-400">Their Version</span>
+              </div>
+              <pre className="p-3 whitespace-pre-wrap overflow-y-auto flex-1 leading-relaxed">{theirs || '（空）'}</pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+
+  if (embedded) return body;
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px] select-none text-xs">{body}</div>;
 };

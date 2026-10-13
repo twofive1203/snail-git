@@ -26,6 +26,10 @@ interface BranchesModalProps {
   onMerge?: (name: string) => void;
   onRebase?: (name: string) => void;
   onCompare?: (name: string) => void;
+  onDelete?: (branch: GitBranch, force: boolean) => void;
+  onRename?: (branch: GitBranch) => void;
+  onToggleFavorite?: (branch: GitBranch) => void;
+  embedded?: boolean;
 }
 
 export const BranchesModal: React.FC<BranchesModalProps> = ({
@@ -38,11 +42,20 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
   onMerge,
   onRebase,
   onCompare,
+  onDelete,
+  onRename,
+  onToggleFavorite,
+  embedded = false,
 }) => {
   const [search, setSearch] = useState('');
   const [selectedBranchForAction, setSelectedBranchForAction] = useState<GitBranch | null>(null);
 
-  if (!isOpen) return null;
+  if (!isOpen && !embedded) return null;
+
+  const finish = () => {
+    setSelectedBranchForAction(null);
+    if (!embedded) onClose();
+  };
 
   const filtered = branches.filter(b => b.name.toLowerCase().includes(search.toLowerCase()));
   const localBranches = filtered.filter(b => !b.isRemote);
@@ -50,13 +63,12 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
 
   const handleCheckout = (name: string) => {
     onSelectBranch(name);
-    setSelectedBranchForAction(null);
-    onClose();
+    finish();
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-[1px] select-none text-xs">
-      <div className="w-[420px] max-h-[580px] bg-jb-panel border border-jb-border rounded-lg shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className={embedded ? 'flex-1 flex flex-col h-full bg-jb-bg select-none text-xs' : 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-[1px] select-none text-xs'}>
+      <div className={embedded ? 'flex-1 flex flex-col overflow-hidden' : 'w-[420px] max-h-[580px] bg-jb-panel border border-jb-border rounded-lg shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150'}>
         {/* 顶部标题与搜索栏 */}
         <div className="p-3 border-b border-jb-border bg-jb-panel/95 space-y-2">
           <div className="flex items-center justify-between">
@@ -64,12 +76,14 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
               <BranchIcon className="w-4 h-4 text-jb-blue" />
               <span className="font-semibold text-sm text-jb-text-primary">Git Branches</span>
             </div>
+            {!embedded && (
             <button 
               onClick={onClose}
               className="p-1 rounded hover:bg-jb-hover text-jb-text-muted hover:text-jb-text-primary"
             >
               <X className="w-4 h-4" />
             </button>
+            )}
           </div>
 
           <div className="relative">
@@ -126,6 +140,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                         <BranchIcon className="w-3.5 h-3.5 text-jb-text-muted shrink-0" />
                       )}
                       <span className="font-mono truncate">{branch.name}</span>
+                      {branch.isFavorite && <Star className="w-3 h-3 text-amber-400 fill-amber-400 shrink-0" />}
                     </div>
 
                     <div className="flex items-center space-x-1.5">
@@ -196,8 +211,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
               <button
                 onClick={() => {
                   onMerge?.(selectedBranchForAction.name);
-                  setSelectedBranchForAction(null);
-                  onClose();
+                  finish();
                 }}
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary"
               >
@@ -208,8 +222,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
               <button
                 onClick={() => {
                   onRebase?.(selectedBranchForAction.name);
-                  setSelectedBranchForAction(null);
-                  onClose();
+                  finish();
                 }}
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary"
               >
@@ -220,13 +233,38 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
               <button
                 onClick={() => {
                   onCompare?.(selectedBranchForAction.name);
-                  setSelectedBranchForAction(null);
-                  onClose();
+                  finish();
                 }}
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary"
               >
                 <Layers className="w-3.5 h-3.5 text-amber-400" />
                 <span>Compare with Current</span>
+              </button>
+
+              <button
+                onClick={() => onRename?.(selectedBranchForAction)}
+                disabled={selectedBranchForAction.isRemote}
+                className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary disabled:opacity-30"
+              >
+                <Scissors className="w-3.5 h-3.5 text-jb-text-muted" />
+                <span>Rename</span>
+              </button>
+
+              <button
+                onClick={() => onToggleFavorite?.(selectedBranchForAction)}
+                className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary"
+              >
+                <Star className={`w-3.5 h-3.5 ${selectedBranchForAction.isFavorite ? 'text-amber-400 fill-amber-400' : 'text-jb-text-muted'}`} />
+                <span>{selectedBranchForAction.isFavorite ? 'Unfavorite' : 'Favorite'}</span>
+              </button>
+
+              <button
+                onClick={() => onDelete?.(selectedBranchForAction, false)}
+                disabled={selectedBranchForAction.name === currentBranch}
+                className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-rose-300 disabled:opacity-30"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{selectedBranchForAction.isRemote ? 'Delete Remote' : 'Delete'}</span>
               </button>
             </div>
           </div>

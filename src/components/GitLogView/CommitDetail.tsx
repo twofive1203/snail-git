@@ -16,11 +16,39 @@ import {
 interface CommitDetailProps {
   commit: GitCommit | null;
   onOpenFileDiff: (filePath: string) => void;
+  onSelectParent?: (hash: string) => void;
+}
+
+function FileTree({ files, onOpen }: { files: GitCommit['files']; onOpen: (path: string) => void }) {
+  const groups = new Map<string, GitCommit['files']>();
+  files.forEach(file => {
+    const slash = file.path.replace(/\\/g, '/').lastIndexOf('/');
+    const dir = slash >= 0 ? file.path.slice(0, slash) : '.';
+    groups.set(dir, [...(groups.get(dir) || []), file]);
+  });
+  return (
+    <div className="space-y-2">
+      {Array.from(groups.entries()).map(([dir, items]) => (
+        <div key={dir}>
+          <div className="px-2 py-1 text-[11px] text-jb-text-muted font-mono flex items-center space-x-1">
+            <Folder className="w-3 h-3" />
+            <span>{dir}</span>
+          </div>
+          {items.map(file => (
+            <button key={file.path} onClick={() => onOpen(file.path)} className="w-full text-left px-6 py-1 hover:bg-jb-hover font-mono truncate">
+              {file.filename}
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export const CommitDetail: React.FC<CommitDetailProps> = ({
   commit,
-  onOpenFileDiff
+  onOpenFileDiff,
+  onSelectParent,
 }) => {
   const [isTreeView, setIsTreeView] = useState(false);
 
@@ -81,7 +109,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
                 <span className="w-16 text-jb-text-secondary">Parents:</span>
                 <div className="flex space-x-1.5">
                   {commit.parents.map(p => (
-                    <span key={p} className="text-purple-400 hover:underline cursor-pointer">{p}</span>
+                    <button key={p} onClick={() => onSelectParent?.(p)} className="text-purple-400 hover:underline">{p.slice(0, 8)}</button>
                   ))}
                 </div>
               </div>
@@ -112,7 +140,9 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
         </div>
 
         <div className="flex-1 overflow-y-auto p-1 space-y-0.5">
-          {commit.files.map((file) => (
+          {isTreeView ? (
+            <FileTree files={commit.files} onOpen={onOpenFileDiff} />
+          ) : commit.files.map((file) => (
             <div
               key={file.path}
               onDoubleClick={() => onOpenFileDiff(file.path)}
@@ -140,7 +170,11 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
                   <span className="text-jb-red">-{file.deletions}</span>
                 )}
                 <button 
-                  title="在新窗口查看 Diff"
+                  title="查看该提交的 Diff"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenFileDiff(file.path);
+                  }}
                   className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-jb-blue transition-opacity"
                 >
                   <ArrowUpRight className="w-3 h-3" />

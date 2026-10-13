@@ -21,7 +21,12 @@ interface HeaderProps {
   onCommitClick: () => void;
   onUpdateClick: () => void;
   onPushClick: () => void;
+  onFetchClick: () => void;
+  onRollbackClick: () => void;
   onShelfClick: () => void;
+  aheadCount?: number;
+  behindCount?: number;
+  memoryMb?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -32,7 +37,12 @@ export const Header: React.FC<HeaderProps> = ({
   onCommitClick,
   onUpdateClick,
   onPushClick,
+  onFetchClick,
+  onRollbackClick,
   onShelfClick,
+  aheadCount = 0,
+  behindCount = 0,
+  memoryMb,
 }) => {
   return (
     <header className="h-11 bg-jb-panel border-b border-jb-border flex items-center justify-between px-3 select-none text-xs">
@@ -96,15 +106,16 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Fetch */}
         <button 
+          onClick={onFetchClick}
           title="Fetch - 刷新所有远程分支状态"
           className="p-1.5 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors"
         >
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
 
-        {/* Rollback (Ctrl+Alt+Z) */}
         <button 
-          title="Rollback (Ctrl+Alt+Z) - 撤销选中或所有更改"
+          onClick={onRollbackClick}
+          title="Rollback - 撤销全部工作区更改"
           className="p-1.5 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors"
         >
           <RotateCcw className="w-3.5 h-3.5" />
@@ -129,7 +140,7 @@ export const Header: React.FC<HeaderProps> = ({
           title="EasyGit 内存占用 vs 传统 IDEA (约 2.5GB-4GB)，内存占用仅为其 1/50"
         >
           <Cpu className="w-3 h-3 text-jb-green" />
-          <span>Memory: 48.2 MB</span>
+          <span>Memory: {memoryMb && memoryMb > 0 ? `${memoryMb} MB` : '—'}</span>
         </div>
 
         {/* 分支小部件 */}
@@ -140,9 +151,11 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <GitBranch className="w-3.5 h-3.5 text-jb-blue" />
           <span className="font-semibold text-blue-400">{currentBranch}</span>
-          <span className="text-[10px] text-jb-text-muted bg-jb-panel px-1 py-0.2 rounded border border-jb-border">
-            ↑1
-          </span>
+          {(aheadCount > 0 || behindCount > 0) && (
+            <span className="text-[10px] text-jb-text-muted bg-jb-panel px-1 py-0.2 rounded border border-jb-border font-mono">
+              {aheadCount > 0 ? `↑${aheadCount}` : ''}{behindCount > 0 ? `↓${behindCount}` : ''}
+            </span>
+          )}
         </button>
       </div>
     </header>

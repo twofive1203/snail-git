@@ -7,9 +7,37 @@ export interface DiffLine {
   oldContent?: string;
   newContent?: string;
   wordDiff?: {
-    type: 'add' | 'del';
+    type: 'add' | 'del' | 'same';
     text: string;
   }[];
+  oldWordDiff?: {
+    type: 'add' | 'del' | 'same';
+    text: string;
+  }[];
+}
+
+export interface RevisionFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface PatchFile extends RevisionFile {
+  chunks: DiffChunk[];
+}
+
+export interface ConflictView {
+  path: string;
+  ours: string;
+  theirs: string;
+  base: string;
+  working: string;
+}
+
+export interface FileMeta {
+  encoding: string;
+  lineEnding: string;
 }
 
 export interface DiffChunk {

@@ -6,9 +6,10 @@ import { CommitView } from './components/CommitView';
 import { BranchesModal } from './components/BranchesModal';
 import { ShelfStashView } from './components/ShelfStashView';
 import { ThreeWayMergeModal } from './components/ThreeWayMergeModal';
+import { DiffModal } from './components/DiffModal';
 import { StatusBar } from './components/StatusBar';
 import { ProjectSidebar } from './components/ProjectSidebar';
-import { FileChange, GitRepository, StashItem } from './types/git';
+import { DiffChunk, FileChange, GitRepository, RevisionFile, StashItem } from './types/git';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 import {
   addSavedRepo,
@@ -16,30 +17,43 @@ import {
   checkoutBranch,
   cherryPick,
   commitChanges,
-  compareBranches,
   createBranch,
+  createPatch,
   createShelf,
+  deleteBranch,
   deleteShelf,
   discardPaths,
+  fetchRepo,
+  inspectFile,
   isTauriEnvironment,
   listenGitChanged,
+  loadConflict,
   loadFileDiff,
   loadRepoSnapshot,
+  loadRevisionDiff,
+  listRevisionFiles,
   listSavedRepos,
   mergeBranch,
   pickDirectory,
+  processMemoryMb,
   pullRepo,
   pushRepo,
   rebaseOnto,
   removeSavedRepo,
-  repoSignature,
+  renameBranch,
   resetTo,
+  resolveConflict,
+  revealPath,
   revertCommit,
   setWatchPath,
+  shelfPatchFiles,
+  smartMergeConflict,
+  stashPatchFiles,
   stashSave,
   stagePaths,
   stashApply,
   stashDrop,
+  toggleFavoriteBranch,
   toggleFavoriteRepo,
   unshelve,
   unstagePaths,
@@ -63,7 +77,7 @@ export function App() {
   const [currentBranch, setCurrentBranch] = useState(activeRepo?.currentBranch || 'main');
   const [aheadCount, setAheadCount] = useState(0);
   const [behindCount, setBehindCount] = useState(0);
-  const [gitVersion, setGitVersion] = useState(native ? 'Git' : 'Git 2.34.1');
+  const [gitVersion, setGitVersion] = useState(native ? 'Git' : '未连接 Git');
   const [branches, setBranches] = useState(native ? [] : mockBranches);
   const [commits, setCommits] = useState(native ? [] : mockCommits);
   const [changes, setChanges] = useState<FileChange[]>(native ? [] : mockCurrentChanges);
@@ -72,12 +86,21 @@ export function App() {
   const [loading, setLoading] = useState(false);
 
   const [isBranchesOpen, setIsBranchesOpen] = useState(false);
-  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [memoryMb, setMemoryMb] = useState(0);
+  const [fileEncoding, setFileEncoding] = useState('—');
+  const [lineEnding, setLineEnding] = useState('—');
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
+  const [conflictPath, setConflictPath] = useState('');
+  const [conflictOurs, setConflictOurs] = useState('');
+  const [conflictTheirs, setConflictTheirs] = useState('');
+  const [conflictResult, setConflictResult] = useState('');
+  const [diffTitle, setDiffTitle] = useState('');
+  const [diffFiles, setDiffFiles] = useState<RevisionFile[]>([]);
+  const diffLoader = useRef<(path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>>(async () => []);
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const refreshLock = useRef(false);
   const refreshAgain = useRef(false);
   const diffLock = useRef(new Set<string>());
-  const lastSig = useRef('');
 
   const showToast = (text: string, error = false) => {
     setToast({ text, error });
@@ -169,21 +192,9 @@ export function App() {
     void listenGitChanged((path) => {
       if (!stop && activeRepo && path === activeRepo.path) void refresh(path);
     }).then(fn => { unlisten = fn; }).catch(() => undefined);
-    const timer = window.setInterval(() => {
-      if (!activeRepo) return;
-      void repoSignature(activeRepo.path).then(sig => {
-        const key = `${activeRepo.path}:${sig}`;
-        if (sig && key !== lastSig.current) {
-          const first = lastSig.current === '';
-          lastSig.current = key;
-          if (!first) void refresh(activeRepo.path);
-        }
-      });
-    }, 2000);
     return () => {
       stop = true;
       unlisten();
-      window.clearInterval(timer);
     };
   }, [activeRepo?.path, refresh]);
 
@@ -218,8 +229,7 @@ export function App() {
     }
     try {
       const repo = await addSavedRepo(name, path);
-      const repos = await listSavedRepos();
-      setRepositories(repos);
+      setRepositories(prev => [repo, ...prev.filter(item => item.id !== repo.id)]);
       setActiveRepoId(repo.id);
       showToast(`已打开仓库：${repo.name}`);
     } catch (err) {
@@ -280,7 +290,7 @@ export function App() {
   const requestDiff = useCallback((file: FileChange) => {
     if (!isTauriEnvironment() || !activeRepo || diffLock.current.has(file.id)) return;
     diffLock.current.add(file.id);
-    void loadFileDiff(activeRepo.path, file.path).then(chunks => {
+    void loadFileDiff(activeRepo.path, file.path, ignoreWhitespace).then(chunks => {
       const additions = chunks.reduce((n, c) => n + c.lines.filter(l => l.type === 'added').length, 0);
       const deletions = chunks.reduce((n, c) => n + c.lines.filter(l => l.type === 'deleted').length, 0);
       setChanges(prev => prev.map(item => item.id === file.id
@@ -290,7 +300,95 @@ export function App() {
       showToast(String(err), true);
       setChanges(prev => prev.map(item => item.id === file.id ? { ...item, chunksLoaded: true } : item));
     }).finally(() => diffLock.current.delete(file.id));
+  }, [activeRepo, ignoreWhitespace]);
+
+  const openDiff = useCallback((title: string, files: RevisionFile[], loader: (path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>) => {
+    diffLoader.current = loader;
+    setDiffFiles(files);
+    setDiffTitle(title);
+  }, []);
+
+  const openRevision = useCallback(async (title: string, spec: string, mode: 'commit' | 'worktree' | 'range', onlyPath?: string) => {
+    if (!isTauriEnvironment() || !activeRepo) {
+      showToast('浏览器预览没有真实提交差异', true);
+      return;
+    }
+    try {
+      const files = await listRevisionFiles(activeRepo.path, spec, mode);
+      const shown = onlyPath ? files.filter(file => file.path === onlyPath) : files;
+      const repoPath = activeRepo.path;
+      openDiff(title, shown.length ? shown : files, (path, ignore) => loadRevisionDiff(repoPath, spec, path, mode, ignore));
+    } catch (err) {
+      showToast(String(err), true);
+    }
+  }, [activeRepo, openDiff]);
+
+  const loadConflictFile = useCallback(async (path: string) => {
+    if (!isTauriEnvironment() || !activeRepo || !path) return;
+    setConflictPath(path);
+    try {
+      const view = await loadConflict(activeRepo.path, path);
+      setConflictOurs(view.ours);
+      setConflictTheirs(view.theirs);
+      setConflictResult(view.working);
+    } catch (err) {
+      showToast(String(err), true);
+    }
   }, [activeRepo]);
+
+  const handleDeleteBranch = async (branch: { name: string; isRemote?: boolean }, force = false) => {
+    if (!isTauriEnvironment() || !activeRepo) {
+      showToast('浏览器预览不会改动真实仓库，请用 pnpm tauri dev', true);
+      return;
+    }
+    if (!force) {
+      const warning = branch.isRemote
+        ? `删除远程分支 ${branch.name}？这会推送删除，不能撤销。`
+        : `删除本地分支 ${branch.name}？`;
+      if (!confirm(warning)) return;
+    }
+    try {
+      const text = await deleteBranch(activeRepo.path, branch.name, Boolean(branch.isRemote), force);
+      showToast(text || '已删除分支');
+      await refresh(activeRepo.path);
+    } catch (err) {
+      const message = String(err);
+      if (!force && !branch.isRemote && /not fully merged|not merged/i.test(message)) {
+        if (confirm('这个分支还没有完全合并。强制删除？')) {
+          await handleDeleteBranch(branch, true);
+        }
+        return;
+      }
+      showToast(message, true);
+    }
+  };
+
+  const handleSelectedFile = useCallback((file: FileChange | null) => {
+    if (!isTauriEnvironment() || !activeRepo || !file) {
+      setFileEncoding('—');
+      setLineEnding('—');
+      return;
+    }
+    void inspectFile(activeRepo.path, file.path).then(meta => {
+      setFileEncoding(meta.encoding);
+      setLineEnding(meta.lineEnding);
+    }).catch(() => {
+      setFileEncoding('—');
+      setLineEnding('—');
+    });
+  }, [activeRepo]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment()) {
+      const heap = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize;
+      if (heap) setMemoryMb(Math.max(1, Math.round(heap / 1048576)));
+      return;
+    }
+    const tick = () => { void processMemoryMb().then(setMemoryMb).catch(() => undefined); };
+    tick();
+    const id = window.setInterval(tick, 8000);
+    return () => window.clearInterval(id);
+  }, [native]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -328,6 +426,13 @@ export function App() {
         onBrowse={pickDirectory}
         onRemoveRepo={(id) => { void handleRemoveRepo(id); }}
         onToggleFavorite={(id) => { void handleToggleFavorite(id); }}
+        onRevealRepo={(repo) => {
+          if (!isTauriEnvironment()) {
+            showToast('浏览器预览不能打开资源管理器', true);
+            return;
+          }
+          void revealPath(repo.path).catch(err => showToast(String(err), true));
+        }}
       />
 
       <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -339,16 +444,33 @@ export function App() {
           onCommitClick={() => setActiveTab('commit')}
           onUpdateClick={() => activeRepo && void run('拉取', () => pullRepo(activeRepo.path))}
           onPushClick={() => activeRepo && void run('推送', () => pushRepo(activeRepo.path))}
+          onFetchClick={() => activeRepo && void run('已刷新远程', () => fetchRepo(activeRepo.path))}
+          onRollbackClick={() => {
+            if (!activeRepo || changes.length === 0) {
+              showToast('没有可回滚的更改', true);
+              return;
+            }
+            if (confirm(`回滚全部 ${changes.length} 个更改到 HEAD？此操作不可用普通撤销恢复。`)) {
+              void run('已回滚工作区', () => discardPaths(activeRepo.path, changes.map(file => file.path)));
+            }
+          }}
           onShelfClick={() => setActiveTab('shelf')}
+          aheadCount={aheadCount}
+          behindCount={behindCount}
+          memoryMb={memoryMb}
         />
 
         <TabBar
           activeTab={activeTab}
           onTabChange={(tab) => {
-            if (tab === 'merge') setIsMergeModalOpen(true);
-            else setActiveTab(tab);
+            setActiveTab(tab);
+            if (tab === 'merge') {
+              const first = changes.find(file => file.status === 'conflict');
+              if (first) void loadConflictFile(first.path);
+            }
           }}
           changesCount={changes.filter(c => c.isStaged).length}
+          gitVersion={gitVersion}
         />
 
         <main className="flex-1 flex overflow-hidden relative">
@@ -361,7 +483,11 @@ export function App() {
           {activeRepo && activeTab === 'log' && (
             <GitLogView
               commits={commits}
-              onOpenFileDiff={() => setActiveTab('commit')}
+              onOpenFileDiff={(commit, path) => {
+                void openRevision(`${commit.shortHash} ${path}`, commit.hash, 'commit', path);
+              }}
+              onShowDiffWithLocal={(commit) => void openRevision(`Diff with Local ${commit.shortHash}`, commit.hash, 'worktree')}
+              onParentMissing={(hash) => showToast(`父提交 ${hash.slice(0, 8)} 不在当前加载的历史里`, true)}
               onCheckout={(hash) => void run('已检出该提交', () => checkoutBranch(activeRepo.path, hash))}
               onCherryPick={(hash) => void run('挑拣完成', () => cherryPick(activeRepo.path, hash))}
               onRevert={(hash) => void run('已还原该提交', () => revertCommit(activeRepo.path, hash))}
@@ -399,18 +525,48 @@ export function App() {
               }}
               onRefresh={() => void refresh()}
               onRequestDiff={requestDiff}
+              onCreatePatch={() => {
+                if (!activeRepo) return;
+                const paths = changes.filter(file => file.isStaged).map(file => file.path);
+                void run('补丁', () => createPatch(activeRepo.path, paths.length ? paths : changes.map(file => file.path)));
+              }}
+              repoKey={activeRepo.id}
+              ignoreWhitespace={ignoreWhitespace}
+              onIgnoreWhitespaceChange={(value) => {
+                setIgnoreWhitespace(value);
+                diffLock.current.clear();
+                setChanges(prev => prev.map(file => ({ ...file, chunks: [], chunksLoaded: false })));
+              }}
+              onResolveConflict={(file) => {
+                setActiveTab('merge');
+                void loadConflictFile(file.path);
+              }}
+              onSelectedFileChange={handleSelectedFile}
             />
           )}
 
           {activeRepo && activeTab === 'branches' && (
-            <div className="flex-1 p-6 flex items-center justify-center">
-              <button
-                onClick={() => setIsBranchesOpen(true)}
-                className="px-4 py-2 rounded bg-jb-blue text-white text-xs"
-              >
-                打开分支面板（当前 {branches.length} 个）
-              </button>
-            </div>
+            <BranchesModal
+              embedded
+              isOpen
+              onClose={() => undefined}
+              branches={branches}
+              currentBranch={currentBranch}
+              onSelectBranch={(name) => void run(`已检出 ${name}`, () => checkoutBranch(activeRepo.path, name))}
+              onCreateBranch={(name) => void run('已创建分支', () => createBranch(activeRepo.path, name))}
+              onMerge={(name) => void run('合并完成', () => mergeBranch(activeRepo.path, name))}
+              onRebase={(name) => void run('变基完成', () => rebaseOnto(activeRepo.path, name))}
+              onCompare={(name) => void openRevision(`Compare ${name} with ${currentBranch}`, `HEAD...${name}`, 'range')}
+              onDelete={(branch, force) => { void handleDeleteBranch(branch, force); }}
+              onRename={(branch) => {
+                const name = prompt('新的分支名：', branch.name);
+                if (name && name !== branch.name) void run('已重命名', () => renameBranch(activeRepo.path, branch.name, name));
+              }}
+              onToggleFavorite={(branch) => void run(branch.isFavorite ? '已取消收藏' : '已收藏分支', async () => {
+                await toggleFavoriteBranch(activeRepo.path, branch.name);
+                return branch.name;
+              })}
+            />
           )}
 
           {activeRepo && activeTab === 'shelf' && (
@@ -426,6 +582,52 @@ export function App() {
                 const message = prompt('贮藏说明：', '') || 'EasyGit stash';
                 void run('已贮藏', () => stashSave(activeRepo.path, message));
               }}
+              onShowShelfDiff={(id) => {
+                if (!isTauriEnvironment()) {
+                  showToast('浏览器预览没有架藏差异', true);
+                  return;
+                }
+                void shelfPatchFiles(activeRepo.path, id).then(files => {
+                  openDiff(`Shelf ${id}`, files, async (path) => files.find(file => file.path === path)?.chunks || []);
+                }).catch(err => showToast(String(err), true));
+              }}
+              onShowStashDiff={(stash) => {
+                if (!isTauriEnvironment()) {
+                  showToast('浏览器预览没有贮藏差异', true);
+                  return;
+                }
+                void stashPatchFiles(activeRepo.path, stash.index).then(files => {
+                  openDiff(stash.message, files, async (path) => files.find(file => file.path === path)?.chunks || []);
+                }).catch(err => showToast(String(err), true));
+              }}
+            />
+          )}
+
+          {activeRepo && activeTab === 'merge' && (
+            <ThreeWayMergeModal
+              embedded
+              isOpen
+              files={changes.filter(file => file.status === 'conflict').map(file => ({ path: file.path }))}
+              activePath={conflictPath}
+              ours={conflictOurs}
+              theirs={conflictTheirs}
+              result={conflictResult}
+              onSelectFile={(path) => { void loadConflictFile(path); }}
+              onResultChange={setConflictResult}
+              onAcceptLeft={() => setConflictResult(conflictOurs)}
+              onAcceptRight={() => setConflictResult(conflictTheirs)}
+              onSmartMerge={() => {
+                if (!isTauriEnvironment() || !conflictPath) {
+                  showToast('浏览器预览不能合并真实冲突', true);
+                  return;
+                }
+                void smartMergeConflict(activeRepo.path, conflictPath).then(setConflictResult).catch(err => showToast(String(err), true));
+              }}
+              onSave={() => {
+                if (!conflictPath) return;
+                void run('冲突已解决', () => resolveConflict(activeRepo.path, conflictPath, conflictResult));
+              }}
+              onClose={() => setActiveTab('commit')}
             />
           )}
 
@@ -442,6 +644,9 @@ export function App() {
           aheadCount={aheadCount}
           behindCount={behindCount}
           gitVersion={gitVersion}
+          memoryMb={memoryMb}
+          encoding={fileEncoding}
+          lineEnding={lineEnding}
         />
       </div>
 
@@ -456,14 +661,29 @@ export function App() {
         onCreateBranch={(name) => void run('已创建分支', () => createBranch(activeRepo.path, name))}
         onMerge={(name) => void run('合并完成', () => mergeBranch(activeRepo.path, name))}
         onRebase={(name) => void run('变基完成', () => rebaseOnto(activeRepo.path, name))}
-        onCompare={(name) => void run('对比', () => compareBranches(activeRepo.path, name))}
+        onCompare={(name) => {
+          setIsBranchesOpen(false);
+          void openRevision(`Compare ${name} with ${currentBranch}`, `HEAD...${name}`, 'range');
+        }}
+        onDelete={(branch, force) => { void handleDeleteBranch(branch, force); }}
+        onRename={(branch) => {
+          const name = prompt('新的分支名：', branch.name);
+          if (name && name !== branch.name) void run('已重命名', () => renameBranch(activeRepo.path, branch.name, name));
+        }}
+        onToggleFavorite={(branch) => void run(branch.isFavorite ? '已取消收藏' : '已收藏分支', async () => {
+          await toggleFavoriteBranch(activeRepo.path, branch.name);
+          return branch.name;
+        })}
       />
 
-      <ThreeWayMergeModal
-        isOpen={isMergeModalOpen}
-        onClose={() => setIsMergeModalOpen(false)}
-        onResolved={() => showToast('冲突标记已处理。请在提交页确认文件后再提交。')}
-      />
+      {diffTitle && (
+        <DiffModal
+          title={diffTitle}
+          files={diffFiles}
+          onLoad={(path, ignore) => diffLoader.current(path, ignore)}
+          onClose={() => setDiffTitle('')}
+        />
+      )}
 
       {toast && (
         <div className="fixed bottom-10 right-6 z-50 bg-jb-panel border border-jb-blue/50 text-white px-4 py-2.5 rounded-lg shadow-2xl flex items-center space-x-2 text-xs max-w-md">

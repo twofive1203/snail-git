@@ -25,6 +25,7 @@ interface ProjectSidebarProps {
   onBrowse?: () => Promise<string | null>;
   onRemoveRepo: (repoId: string) => void;
   onToggleFavorite: (repoId: string) => void;
+  onRevealRepo?: (repo: GitRepository) => void;
 }
 
 export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
@@ -35,6 +36,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onBrowse,
   onRemoveRepo,
   onToggleFavorite,
+  onRevealRepo,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -181,6 +183,23 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                       <Star className={`w-3 h-3 ${repo.isFavorite ? 'fill-amber-400 text-amber-400' : ''}`} />
                     </button>
 
+                    <button
+                      onClick={(e) => handleCopyPath(repo.path, e)}
+                      title="复制路径"
+                      className="p-1 rounded hover:bg-[#35373C] text-[#8C9099] hover:text-[#DFE1E5]"
+                    >
+                      <Copy className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRevealRepo?.(repo);
+                      }}
+                      title="在资源管理器中打开"
+                      className="p-1 rounded hover:bg-[#35373C] text-[#8C9099] hover:text-[#DFE1E5]"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

@@ -2,7 +2,6 @@ mod git_ops;
 
 use git_ops::RepoSnapshot;
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -29,7 +28,8 @@ pub struct RepoBriefInfo {
 
 #[tauri::command]
 fn get_system_git_version() -> Result<String, String> {
-    let output = Command::new("git")
+    let _slot = git_ops::acquire_git_slot();
+    let output = git_ops::git_command()
         .arg("--version")
         .output()
         .map_err(|e| format!("无法执行 git：{e}"))?;
@@ -43,7 +43,8 @@ fn get_system_git_version() -> Result<String, String> {
 #[tauri::command]
 fn execute_git_command(args: Vec<String>, cwd: String) -> GitExecutionResult {
     let start = Instant::now();
-    let result = Command::new("git").args(&args).current_dir(&cwd).output();
+    let _slot = git_ops::acquire_git_slot();
+    let result = git_ops::git_command().args(&args).current_dir(&cwd).output();
     let elapsed = start.elapsed().as_millis();
     match result {
         Ok(output) => GitExecutionResult {
@@ -122,8 +123,8 @@ fn set_watch_path(repo_path: String) {
 }
 
 #[tauri::command]
-fn load_file_diff(repo_path: String, path: String) -> Result<Vec<git_ops::DiffChunkDto>, String> {
-    git_ops::file_diff(&repo_path, &path)
+fn load_file_diff(repo_path: String, path: String, ignore_ws: Option<bool>) -> Result<Vec<git_ops::DiffChunkDto>, String> {
+    git_ops::file_diff_opts(&repo_path, &path, ignore_ws.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -236,16 +237,94 @@ fn pick_directory() -> Result<Option<String>, String> {
     git_ops::pick_directory()
 }
 
+#[tauri::command]
+fn fetch_repo(repo_path: String) -> Result<String, String> {
+    git_ops::fetch_repo(&repo_path)
+}
+
+#[tauri::command]
+fn create_patch(repo_path: String, paths: Vec<String>) -> Result<String, String> {
+    git_ops::create_patch(&repo_path, &paths)
+}
+
+#[tauri::command]
+fn list_revision_files(repo_path: String, spec: String, mode: String) -> Result<Vec<git_ops::RevisionFileDto>, String> {
+    git_ops::list_revision_files(&repo_path, &spec, &mode)
+}
+
+#[tauri::command]
+fn load_revision_diff(repo_path: String, spec: String, path: String, mode: String, ignore_ws: bool) -> Result<Vec<git_ops::DiffChunkDto>, String> {
+    git_ops::load_revision_diff(&repo_path, &spec, &path, &mode, ignore_ws)
+}
+
+#[tauri::command]
+fn shelf_patch_files(repo_path: String, id: String) -> Result<Vec<git_ops::PatchFileDto>, String> {
+    git_ops::shelf_patch_files(&repo_path, &id)
+}
+
+#[tauri::command]
+fn stash_patch_files(repo_path: String, index: u32) -> Result<Vec<git_ops::PatchFileDto>, String> {
+    git_ops::stash_patch_files(&repo_path, index)
+}
+
+#[tauri::command]
+fn delete_branch(repo_path: String, name: String, remote: bool, force: bool) -> Result<String, String> {
+    git_ops::delete_branch(&repo_path, &name, remote, force)
+}
+
+#[tauri::command]
+fn rename_branch(repo_path: String, old_name: String, new_name: String) -> Result<String, String> {
+    git_ops::rename_branch(&repo_path, &old_name, &new_name)
+}
+
+#[tauri::command]
+fn toggle_favorite_branch(repo_path: String, name: String) -> Result<(), String> {
+    git_ops::toggle_favorite_branch(&repo_path, &name)
+}
+
+#[tauri::command]
+fn load_conflict(repo_path: String, path: String) -> Result<git_ops::ConflictViewDto, String> {
+    git_ops::load_conflict(&repo_path, &path)
+}
+
+#[tauri::command]
+fn resolve_conflict(repo_path: String, path: String, content: String) -> Result<String, String> {
+    git_ops::resolve_conflict(&repo_path, &path, &content)
+}
+
+#[tauri::command]
+fn smart_merge_conflict(repo_path: String, path: String) -> Result<String, String> {
+    git_ops::smart_merge_conflict(&repo_path, &path)
+}
+
+#[tauri::command]
+fn inspect_file(repo_path: String, path: String) -> Result<git_ops::FileMetaDto, String> {
+    git_ops::inspect_file(&repo_path, &path)
+}
+
+#[tauri::command]
+fn process_memory_mb() -> u32 {
+    git_ops::process_memory_mb()
+}
+
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    git_ops::reveal_path(&path)
+}
+
 fn watch_loop(app: AppHandle) {
     let mut last_sig = String::new();
     let mut last_path = String::new();
     loop {
-        std::thread::sleep(Duration::from_millis(1500));
+        std::thread::sleep(Duration::from_millis(2500));
         let path = WATCH_PATH.lock().map(|g| g.clone()).unwrap_or_default();
         if path.is_empty() {
             continue;
         }
-        let sig = git_ops::signature(&path);
+        // 失败时保留上次签名。大仓库上 status 超时若被当成“变了”，会和成功结果来回触发全量刷新。
+        let Some(sig) = git_ops::poll_signature(&path) else {
+            continue;
+        };
         if path != last_path || sig != last_sig {
             let changed = !last_path.is_empty() && (path != last_path || sig != last_sig);
             last_path = path.clone();
@@ -353,7 +432,22 @@ pub fn run() {
             create_shelf,
             unshelve,
             delete_shelf,
-            pick_directory
+            pick_directory,
+            fetch_repo,
+            create_patch,
+            list_revision_files,
+            load_revision_diff,
+            shelf_patch_files,
+            stash_patch_files,
+            delete_branch,
+            rename_branch,
+            toggle_favorite_branch,
+            load_conflict,
+            resolve_conflict,
+            smart_merge_conflict,
+            inspect_file,
+            process_memory_mb,
+            reveal_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running easy-git tauri application");

@@ -6,7 +6,9 @@ import { CommitDetail } from './CommitDetail';
 
 interface GitLogViewProps {
   commits: GitCommit[];
-  onOpenFileDiff: (filePath: string) => void;
+  onOpenFileDiff: (commit: GitCommit, filePath: string) => void;
+  onShowDiffWithLocal?: (commit: GitCommit) => void;
+  onParentMissing?: (hash: string) => void;
   onCheckout?: (hash: string) => void;
   onCherryPick?: (hash: string) => void;
   onRevert?: (hash: string) => void;
@@ -14,9 +16,25 @@ interface GitLogViewProps {
   onCreateBranch?: (hash: string) => void;
 }
 
+function matchesDate(date: string, range: string): boolean {
+  if (range === 'All') return true;
+  const parsed = Date.parse(date.replace(' ', 'T'));
+  if (Number.isNaN(parsed)) return true;
+  const now = Date.now();
+  if (range === 'Today') {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return parsed >= start.getTime();
+  }
+  const days = range === 'Last 7 Days' ? 7 : range === 'Last 30 Days' ? 30 : 0;
+  return days === 0 || now - parsed <= days * 86400000;
+}
+
 export const GitLogView: React.FC<GitLogViewProps> = ({
   commits,
   onOpenFileDiff,
+  onShowDiffWithLocal,
+  onParentMissing,
   onCheckout,
   onCherryPick,
   onRevert,
@@ -26,6 +44,8 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranch, setSelectedBranch] = useState('All');
   const [selectedAuthor, setSelectedAuthor] = useState('All');
+  const [selectedDate, setSelectedDate] = useState('All');
+  const [pathQuery, setPathQuery] = useState('');
   const [selectedCommitHash, setSelectedCommitHash] = useState<string>(
     commits.length > 0 ? commits[0].hash : ''
   );
@@ -72,9 +92,15 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         }
       }
 
+      if (!matchesDate(commit.date, selectedDate)) return false;
+      if (pathQuery.trim()) {
+        const q = pathQuery.trim().toLowerCase();
+        if (!commit.files.some(file => file.path.toLowerCase().includes(q))) return false;
+      }
+
       return true;
     });
-  }, [commits, searchQuery, selectedBranch, selectedAuthor]);
+  }, [commits, searchQuery, selectedBranch, selectedAuthor, selectedDate, pathQuery]);
 
   const currentSelectedCommit = useMemo(() => {
     return commits.find(c => c.hash === selectedCommitHash) || (commits.length > 0 ? commits[0] : null);
@@ -89,6 +115,10 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         onBranchChange={setSelectedBranch}
         selectedAuthor={selectedAuthor}
         onAuthorChange={setSelectedAuthor}
+        selectedDate={selectedDate}
+        onDateChange={setSelectedDate}
+        pathQuery={pathQuery}
+        onPathChange={setPathQuery}
         branches={branches}
         authors={authors}
       />
@@ -97,11 +127,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         commits={filteredCommits}
         selectedHash={selectedCommitHash}
         onSelectCommit={(commit) => setSelectedCommitHash(commit.hash)}
-        onViewDiff={(commit) => {
-          if (commit.files.length > 0) {
-            onOpenFileDiff(commit.files[0].path);
-          }
-        }}
+        onViewDiff={(commit) => onShowDiffWithLocal?.(commit)}
         onCheckout={onCheckout}
         onCherryPick={onCherryPick}
         onRevert={onRevert}
@@ -111,7 +137,14 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
 
       <CommitDetail
         commit={currentSelectedCommit}
-        onOpenFileDiff={onOpenFileDiff}
+        onOpenFileDiff={(path) => {
+          if (currentSelectedCommit) onOpenFileDiff(currentSelectedCommit, path);
+        }}
+        onSelectParent={(hash) => {
+          const found = commits.find(commit => commit.hash === hash || commit.hash.startsWith(hash) || hash.startsWith(commit.hash));
+          if (found) setSelectedCommitHash(found.hash);
+          else onParentMissing?.(hash);
+        }}
       />
     </div>
   );

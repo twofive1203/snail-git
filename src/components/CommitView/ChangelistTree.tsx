@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { FileChange, FileChangeStatus } from '../../types/git';
 import { 
   ChevronDown, 
@@ -26,6 +26,7 @@ interface ChangelistTreeProps {
   onShelveSelected: () => void;
   onRollbackSelected: () => void;
   onRefresh?: () => void;
+  repoKey?: string;
 }
 
 // 内部树节点结构
@@ -50,7 +51,34 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   onShelveSelected,
   onRollbackSelected,
   onRefresh,
+  repoKey = 'default',
 }) => {
+  const storageKey = `easygit.changelists.${repoKey}`;
+  const [changelistNames, setChangelistNames] = useState<string[]>(['更改']);
+  const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [activeList, setActiveList] = useState('全部');
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { names?: string[]; assignments?: Record<string, string> };
+      if (parsed.names?.length) setChangelistNames(Array.from(new Set(['更改', ...parsed.names])));
+      if (parsed.assignments) setAssignments(parsed.assignments);
+    } catch {
+      /* 本地列表损坏时退回默认列表 */
+    }
+  }, [storageKey]);
+
+  const persistLists = (names: string[], map: Record<string, string>) => {
+    setChangelistNames(names);
+    setAssignments(map);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ names, assignments: map }));
+    } catch {
+      /* 浏览器禁止本地存储时，列表只在当前会话有效 */
+    }
+  };
   // 视图模式：树状视图 (tree) vs 扁平列表 (flat)
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [compactMiddleFolders, setCompactMiddleFolders] = useState(true);
@@ -72,8 +100,12 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     'eam-agent/src/main/java/com/uinnova/product/eam/agent'
   );
 
-  const trackedFiles = changes.filter(c => c.status !== 'untracked');
-  const untrackedFiles = changes.filter(c => c.status === 'untracked');
+  const visibleChanges = changes.filter(file => {
+    if (activeList === '全部') return true;
+    return (assignments[file.path] || '更改') === activeList;
+  });
+  const trackedFiles = visibleChanges.filter(c => c.status !== 'untracked');
+  const untrackedFiles = visibleChanges.filter(c => c.status === 'untracked');
 
   // 构建树形结构并执行紧凑折叠算法
   const buildTree = (fileList: FileChange[], rootKey: string): TreeNode[] => {
@@ -463,15 +495,43 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
             title="全部展开"
             className="p-1 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
           >
-            <ChevronsUpDown className="w-3.5 h-3.5" />
+            <Maximize2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={collapseAll}
+            title="全部折叠"
+            className="p-1 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
+          >
+            <Minimize2 className="w-3.5 h-3.5" />
           </button>
 
-          {/* 更改列表(T) 下拉选择框 */}
           <div className="flex items-center space-x-1 text-[11px] bg-[#1E1F22] border border-[#393B40] rounded px-1.5 py-0.5">
-            <span className="text-[#8C9099]">更改列表(T):</span>
-            <select className="bg-transparent border-none text-[#DFE1E5] focus:outline-none cursor-pointer font-medium">
-              <option value="default" className="bg-[#2B2D30]">更改</option>
-              <option value="custom" className="bg-[#2B2D30]">WIP 特性</option>
+            <span className="text-[#8C9099]">更改列表:</span>
+            <select
+              value={activeList}
+              onChange={(e) => {
+                if (e.target.value === '__new__') {
+                  const name = prompt('新的更改列表名称：', '');
+                  if (name && !changelistNames.includes(name)) persistLists([...changelistNames, name], assignments);
+                  if (name) setActiveList(name);
+                  return;
+                }
+                if (e.target.value === '__move__') {
+                  const file = changes.find(item => item.id === selectedFileId);
+                  const target = activeList === '全部' ? '更改' : activeList;
+                  if (file) persistLists(changelistNames, { ...assignments, [file.path]: target });
+                  return;
+                }
+                setActiveList(e.target.value);
+              }}
+              className="bg-transparent border-none text-[#DFE1E5] focus:outline-none cursor-pointer font-medium max-w-[88px]"
+            >
+              <option value="全部" className="bg-[#2B2D30]">全部</option>
+              {changelistNames.map(name => (
+                <option key={name} value={name} className="bg-[#2B2D30]">{name}</option>
+              ))}
+              <option value="__new__" className="bg-[#2B2D30]">新建列表...</option>
+              <option value="__move__" className="bg-[#2B2D30]">把当前文件移入此列表</option>
             </select>
           </div>
         </div>

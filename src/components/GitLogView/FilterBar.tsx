@@ -8,6 +8,10 @@ interface FilterBarProps {
   onBranchChange: (b: string) => void;
   selectedAuthor: string;
   onAuthorChange: (a: string) => void;
+  selectedDate: string;
+  onDateChange: (d: string) => void;
+  pathQuery: string;
+  onPathChange: (p: string) => void;
   branches: string[];
   authors: string[];
 }
@@ -19,6 +23,10 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   onBranchChange,
   selectedAuthor,
   onAuthorChange,
+  selectedDate,
+  onDateChange,
+  pathQuery,
+  onPathChange,
   branches,
   authors,
 }) => {
@@ -67,19 +75,27 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         <div className="flex items-center space-x-1 bg-jb-bg border border-jb-border rounded px-2 py-1 text-jb-text-primary hover:border-jb-borderHover">
           <Calendar className="w-3 h-3 text-purple-400" />
           <span className="text-jb-text-muted text-[11px]">Date:</span>
-          <select className="bg-transparent border-none text-xs focus:outline-none cursor-pointer text-jb-text-primary font-medium">
-            <option className="bg-jb-panel">All</option>
-            <option className="bg-jb-panel">Today</option>
-            <option className="bg-jb-panel">Last 7 Days</option>
-            <option className="bg-jb-panel">Last 30 Days</option>
+          <select
+            value={selectedDate}
+            onChange={(e) => onDateChange(e.target.value)}
+            className="bg-transparent border-none text-xs focus:outline-none cursor-pointer text-jb-text-primary font-medium"
+          >
+            <option value="All" className="bg-jb-panel">All</option>
+            <option value="Today" className="bg-jb-panel">Today</option>
+            <option value="Last 7 Days" className="bg-jb-panel">Last 7 Days</option>
+            <option value="Last 30 Days" className="bg-jb-panel">Last 30 Days</option>
           </select>
         </div>
 
-        {/* 路径过滤器 */}
-        <div className="flex items-center space-x-1 bg-jb-bg border border-jb-border rounded px-2 py-1 text-jb-text-primary hover:border-jb-borderHover cursor-pointer">
+        <div className="flex items-center space-x-1 bg-jb-bg border border-jb-border rounded px-2 py-1 text-jb-text-primary hover:border-jb-borderHover">
           <FolderTree className="w-3 h-3 text-jb-orange" />
           <span className="text-jb-text-muted text-[11px]">Paths:</span>
-          <span className="text-jb-text-primary">All</span>
+          <input
+            value={pathQuery}
+            onChange={(e) => onPathChange(e.target.value)}
+            placeholder="All"
+            className="w-28 bg-transparent border-none text-xs focus:outline-none text-jb-text-primary placeholder-jb-text-muted"
+          />
         </div>
       </div>
 

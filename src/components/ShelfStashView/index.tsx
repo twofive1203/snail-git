@@ -22,6 +22,8 @@ interface ShelfStashViewProps {
   onDropStash?: (stash: StashItem) => void;
   onDeleteShelf?: (shelfId: string) => void;
   onCreateStash?: () => void;
+  onShowShelfDiff?: (shelfId: string) => void;
+  onShowStashDiff?: (stash: StashItem) => void;
 }
 
 export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
@@ -33,6 +35,8 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
   onDropStash,
   onDeleteShelf,
   onCreateStash,
+  onShowShelfDiff,
+  onShowStashDiff,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'shelf' | 'stash'>('shelf');
   const [shelves, setShelves] = useState<ShelfItem[]>(initialShelves);
@@ -157,6 +161,13 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
 
                   <div className="flex items-center space-x-2">
                     <button
+                      onClick={() => onShowShelfDiff?.(selectedShelf.id)}
+                      className="px-3 py-1.5 bg-jb-panel hover:bg-jb-hover text-jb-text-primary rounded border border-jb-border flex items-center space-x-1.5"
+                    >
+                      <FileDiff className="w-3.5 h-3.5 text-jb-blue" />
+                      <span>查看差异</span>
+                    </button>
+                    <button
                       onClick={() => onUnshelve(selectedShelf.id)}
                       className="px-3 py-1.5 bg-jb-blue hover:bg-jb-blueHover text-white rounded font-medium flex items-center space-x-1.5 transition-colors shadow-sm"
                     >
@@ -226,6 +237,12 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
               </div>
 
               <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => onShowStashDiff?.(stash)}
+                  className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover text-jb-text-primary border border-jb-border"
+                >
+                  查看差异
+                </button>
                 <button
                   onClick={() => onApplyStash(stash)}
                   className="px-2.5 py-1.5 rounded bg-jb-blue/20 hover:bg-jb-blue/30 text-jb-blue font-medium border border-jb-blue/30"

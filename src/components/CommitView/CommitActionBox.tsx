@@ -6,6 +6,7 @@ interface CommitActionBoxProps {
   onCommit: (message: string, isAmend: boolean) => void;
   onCommitAndPush: (message: string, isAmend: boolean) => void;
   onShelve: () => void;
+  onCreatePatch: () => void;
 }
 
 export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
@@ -13,6 +14,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
   onCommit,
   onCommitAndPush,
   onShelve,
+  onCreatePatch,
 }) => {
   const [message, setMessage] = useState('');
   const [isAmend, setIsAmend] = useState(false);
@@ -128,7 +130,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
               <button
                 onClick={() => {
                   setShowDropdown(false);
-                  alert('Patch created successfully: easy-git.patch');
+                  onCreatePatch();
                 }}
                 className="w-full text-left px-3 py-1.5 hover:bg-jb-selected text-jb-text-primary hover:text-white flex items-center space-x-2"
               >

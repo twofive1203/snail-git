@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { FileChange, DiffChunk } from '../../types/git';
+import React, { useEffect, useRef, useState } from 'react';
+import { FileChange, DiffLine } from '../../types/git';
 import { 
   Columns, 
   AlignJustify, 
@@ -18,17 +18,54 @@ interface SideBySideDiffProps {
   file: FileChange | null;
   onToggleChunkStage: (chunkId: string) => void;
   onRevertChunk: (chunkId: string) => void;
+  readOnly?: boolean;
+  baselineLabel?: string;
+  ignoreWhitespace?: boolean;
+  onIgnoreWhitespaceChange?: (value: boolean) => void;
+}
+
+function WordText({ spans, side }: { spans: NonNullable<DiffLine['wordDiff']>; side: 'old' | 'new' }) {
+  return (
+    <span>
+      {spans.map((part, index) => (
+        <span
+          key={index}
+          className={part.type === 'same'
+            ? ''
+            : side === 'old'
+              ? 'bg-rose-500/40 text-rose-50 rounded-sm'
+              : 'bg-emerald-500/40 text-emerald-50 rounded-sm'}
+        >
+          {part.text}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   file,
   onToggleChunkStage,
   onRevertChunk,
+  readOnly = false,
+  baselineLabel = 'HEAD vs Working Tree',
+  ignoreWhitespace: ignoreWhitespaceProp,
+  onIgnoreWhitespaceChange,
 }) => {
   const [isUnified, setIsUnified] = useState(false);
-  const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
+  const [ignoreWhitespaceLocal, setIgnoreWhitespaceLocal] = useState(false);
+  const ignoreWhitespace = ignoreWhitespaceProp ?? ignoreWhitespaceLocal;
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
-  const chunks = file?.chunks ?? [];
+  const chunkRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const chunks = (file?.chunks ?? []).map(chunk => ({
+    ...chunk,
+    lines: ignoreWhitespace
+      ? chunk.lines.filter(line => {
+          const text = `${line.oldContent ?? ''}${line.newContent ?? ''}`;
+          return line.type === 'unchanged' || line.type === 'modified' || text.trim() !== '';
+        })
+      : chunk.lines,
+  }));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -43,6 +80,10 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [chunks.length]);
+
+  useEffect(() => {
+    chunkRefs.current[currentChunkIndex]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [currentChunkIndex, file?.id]);
 
   if (!file) {
     return (
@@ -63,7 +104,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
             {file.path}
           </span>
           <span className="text-[11px] text-jb-text-muted font-sans hidden md:inline">
-            (HEAD vs Working Tree)
+            ({baselineLabel})
           </span>
         </div>
 
@@ -96,7 +137,11 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
 
           {/* 忽略空格切换 */}
           <button
-            onClick={() => setIgnoreWhitespace(!ignoreWhitespace)}
+            onClick={() => {
+              const next = !ignoreWhitespace;
+              setIgnoreWhitespaceLocal(next);
+              onIgnoreWhitespaceChange?.(next);
+            }}
             className={`px-2 py-1 rounded text-[11px] border transition-colors ${
               ignoreWhitespace 
                 ? 'bg-jb-blue/20 text-jb-blue border-jb-blue/40 font-medium' 
@@ -155,7 +200,8 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
         ) : (
           chunks.map((chunk, cIdx) => (
             <div 
-              key={chunk.id} 
+              key={chunk.id}
+              ref={(node) => { chunkRefs.current[cIdx] = node; }}
               className={`border-y border-jb-border/40 my-2 ${
                 cIdx === currentChunkIndex ? 'ring-1 ring-jb-blue/40 bg-jb-blue/5' : ''
               }`}
@@ -165,7 +211,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => onToggleChunkStage(chunk.id)}
-                    className="flex items-center space-x-1 text-jb-blue hover:text-jb-blueHover focus:outline-none"
+                    className={`flex items-center space-x-1 text-jb-blue hover:text-jb-blueHover focus:outline-none ${readOnly ? 'hidden' : ''}`}
                     title="勾选/取消此块提交 (Partial Commit)"
                   >
                     {chunk.isStaged ? (
@@ -182,7 +228,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
                   </span>
                 </div>
 
-                <div className="flex items-center space-x-1.5">
+                <div className={`flex items-center space-x-1.5 ${readOnly ? 'hidden' : ''}`}>
                   <button
                     onClick={() => onToggleChunkStage(chunk.id)}
                     className="flex items-center space-x-1 px-2 py-0.5 rounded bg-jb-blue/15 hover:bg-jb-blue/25 text-jb-blue border border-jb-blue/30"
@@ -213,50 +259,52 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
                   return (
                     <div 
                       key={lIdx}
-                      className={`grid grid-cols-[1fr,40px,1fr] min-h-[20px] leading-5 items-stretch ${
+                      className={`${isUnified ? 'grid-cols-[3rem_3rem_1fr]' : 'grid-cols-[1fr,40px,1fr]'} grid min-h-[20px] leading-5 items-stretch ${
                         isAdd ? 'bg-emerald-950/25' :
                         isDel ? 'bg-rose-950/25' :
                         isMod ? 'bg-blue-950/25' : ''
                       }`}
                     >
-                      {/* 左侧旧行 */}
-                      <div className={`flex border-r border-jb-border/40 ${isDel ? 'bg-rose-950/30 text-rose-200' : ''}`}>
+                      {isUnified ? (
+                        <>
+                          <div className="px-2 text-right text-jb-text-muted bg-jb-panel/30 select-none border-r border-jb-border/30">
+                            {line.oldLineNumber || ''}
+                          </div>
+                          <div className="px-2 text-right text-jb-text-muted bg-jb-panel/30 select-none border-r border-jb-border/30">
+                            {line.newLineNumber || ''}
+                          </div>
+                          <div className={`px-3 whitespace-pre overflow-x-auto ${isDel ? 'text-rose-200' : isAdd ? 'text-emerald-200' : ''}`}>
+                            <span className="inline-block w-4 text-jb-text-muted">{isAdd ? '+' : isDel ? '-' : ' '}</span>
+                            {line.wordDiff ? <WordText spans={line.wordDiff} side="new" /> : (line.newContent ?? line.oldContent ?? '')}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                      <div className={`flex border-r border-jb-border/40 ${isDel || isMod ? 'bg-rose-950/20 text-rose-100' : ''}`}>
                         <div className="w-10 px-2 text-right text-jb-text-muted bg-jb-panel/30 select-none border-r border-jb-border/30">
                           {line.oldLineNumber || ''}
                         </div>
                         <div className="px-3 whitespace-pre overflow-x-auto flex-1">
-                          {line.oldContent || ''}
+                          {line.oldWordDiff ? <WordText spans={line.oldWordDiff} side="old" /> : (line.oldContent || '')}
                         </div>
                       </div>
 
-                      {/* 中间操作小槽 */}
                       <div className="flex items-center justify-center bg-jb-panel/40 border-r border-jb-border/40 select-none">
                         {isAdd && <span className="text-jb-green font-bold text-xs">+</span>}
                         {isDel && <span className="text-jb-red font-bold text-xs">-</span>}
+                        {isMod && <span className="text-jb-blue font-bold text-xs">~</span>}
                       </div>
 
-                      {/* 右侧新行 */}
-                      <div className={`flex ${isAdd ? 'bg-emerald-950/30 text-emerald-200' : ''}`}>
+                      <div className={`flex ${isAdd || isMod ? 'bg-emerald-950/20 text-emerald-100' : ''}`}>
                         <div className="w-10 px-2 text-right text-jb-text-muted bg-jb-panel/30 select-none border-r border-jb-border/30">
                           {line.newLineNumber || ''}
                         </div>
                         <div className="px-3 whitespace-pre overflow-x-auto flex-1">
-                          {line.wordDiff ? (
-                            <span>
-                              {line.wordDiff.map((w, wIdx) => (
-                                <span 
-                                  key={wIdx} 
-                                  className="bg-emerald-500/30 text-emerald-100 rounded px-0.5 border border-emerald-500/50"
-                                >
-                                  {w.text}
-                                </span>
-                              ))}
-                            </span>
-                          ) : (
-                            line.newContent || ''
-                          )}
+                          {line.wordDiff ? <WordText spans={line.wordDiff} side="new" /> : (line.newContent || '')}
                         </div>
                       </div>
+                        </>
+                      )}
                     </div>
                   );
                 })}

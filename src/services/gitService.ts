@@ -1,4 +1,4 @@
-import { DiffChunk, FileChange, GitBranch, GitCommit, GitRepository, ShelfItem, StashItem } from '../types/git';
+import { ConflictView, DiffChunk, FileChange, FileMeta, GitBranch, GitCommit, GitRepository, PatchFile, RevisionFile, ShelfItem, StashItem } from '../types/git';
 
 export function isTauriEnvironment(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -74,8 +74,8 @@ export async function listenGitChanged(cb: (path: string) => void): Promise<() =
   return () => unlisten();
 }
 
-export async function loadFileDiff(repoPath: string, path: string): Promise<DiffChunk[]> {
-  return invokeTauri<DiffChunk[]>('load_file_diff', { repoPath, path });
+export async function loadFileDiff(repoPath: string, path: string, ignoreWhitespace = false): Promise<DiffChunk[]> {
+  return invokeTauri<DiffChunk[]>('load_file_diff', { repoPath, path, ignoreWs: ignoreWhitespace });
 }
 
 export async function stagePaths(repoPath: string, paths: string[]): Promise<void> {
@@ -165,4 +165,65 @@ export async function deleteShelf(repoPath: string, id: string): Promise<void> {
 export async function pickDirectory(): Promise<string | null> {
   if (!isTauriEnvironment()) return null;
   return invokeTauri<string | null>('pick_directory');
+}
+
+export async function fetchRepo(repoPath: string): Promise<string> {
+  return invokeTauri<string>('fetch_repo', { repoPath });
+}
+
+export async function createPatch(repoPath: string, paths: string[]): Promise<string> {
+  return invokeTauri<string>('create_patch', { repoPath, paths });
+}
+
+export async function listRevisionFiles(repoPath: string, spec: string, mode: 'commit' | 'worktree' | 'range'): Promise<RevisionFile[]> {
+  return invokeTauri<RevisionFile[]>('list_revision_files', { repoPath, spec, mode });
+}
+
+export async function loadRevisionDiff(repoPath: string, spec: string, path: string, mode: 'commit' | 'worktree' | 'range', ignoreWhitespace = false): Promise<DiffChunk[]> {
+  return invokeTauri<DiffChunk[]>('load_revision_diff', { repoPath, spec, path, mode, ignoreWs: ignoreWhitespace });
+}
+
+export async function shelfPatchFiles(repoPath: string, id: string): Promise<PatchFile[]> {
+  return invokeTauri<PatchFile[]>('shelf_patch_files', { repoPath, id });
+}
+
+export async function stashPatchFiles(repoPath: string, index: number): Promise<PatchFile[]> {
+  return invokeTauri<PatchFile[]>('stash_patch_files', { repoPath, index });
+}
+
+export async function deleteBranch(repoPath: string, name: string, remote: boolean, force: boolean): Promise<string> {
+  return invokeTauri<string>('delete_branch', { repoPath, name, remote, force });
+}
+
+export async function renameBranch(repoPath: string, oldName: string, newName: string): Promise<string> {
+  return invokeTauri<string>('rename_branch', { repoPath, oldName, newName });
+}
+
+export async function toggleFavoriteBranch(repoPath: string, name: string): Promise<void> {
+  await invokeTauri('toggle_favorite_branch', { repoPath, name });
+}
+
+export async function loadConflict(repoPath: string, path: string): Promise<ConflictView> {
+  return invokeTauri<ConflictView>('load_conflict', { repoPath, path });
+}
+
+export async function resolveConflict(repoPath: string, path: string, content: string): Promise<string> {
+  return invokeTauri<string>('resolve_conflict', { repoPath, path, content });
+}
+
+export async function smartMergeConflict(repoPath: string, path: string): Promise<string> {
+  return invokeTauri<string>('smart_merge_conflict', { repoPath, path });
+}
+
+export async function inspectFile(repoPath: string, path: string): Promise<FileMeta> {
+  return invokeTauri<FileMeta>('inspect_file', { repoPath, path });
+}
+
+export async function processMemoryMb(): Promise<number> {
+  if (!isTauriEnvironment()) return 0;
+  return invokeTauri<number>('process_memory_mb');
+}
+
+export async function revealPath(path: string): Promise<void> {
+  await invokeTauri('reveal_path', { path });
 }
