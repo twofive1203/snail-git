@@ -156,7 +156,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
 
   return (
     <div 
-      className="flex-1 overflow-auto overflow-x-auto bg-jb-bg select-none relative focus:outline-none"
+      className="flex-1 h-full min-h-0 overflow-auto overflow-x-auto bg-jb-bg select-none relative focus:outline-none"
       onClick={() => setContextMenu(prev => ({ ...prev, visible: false }))}
     >
       <table className="w-full table-fixed border-collapse text-xs font-sans min-w-[760px]">

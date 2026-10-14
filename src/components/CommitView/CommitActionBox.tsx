@@ -77,8 +77,8 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
       : 'text-jb-text-muted';
 
   return (
-    <div className="h-44 border-t border-jb-border bg-jb-panel p-3 flex flex-col justify-between text-xs select-none">
-      <div className="flex items-center justify-between mb-1.5">
+    <div className="flex-1 h-full min-h-0 bg-jb-panel p-3 flex flex-col text-xs select-none overflow-hidden">
+      <div className="flex items-center justify-between mb-1.5 shrink-0">
         <div className="flex items-center space-x-1.5">
           <span className="text-jb-text-muted text-[11px] font-medium">Prefixes:</span>
           {prefixes.map(p => (
@@ -103,7 +103,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
         </label>
       </div>
 
-      <div className="flex-1 relative mb-2">
+      <div className="flex-1 relative mb-2 min-h-0">
         <textarea
           ref={textareaRef}
           value={message}
@@ -127,7 +127,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
         </span>
       </div>
 
-      <div className="flex items-center justify-between pt-1">
+      <div className="flex items-center justify-between pt-1 shrink-0">
         <div className="flex items-center space-x-2 text-jb-text-muted text-[11px]">
           <span>{stagedFilesCount} file(s) staged</span>
           <span>•</span>

@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { GitCommit } from '../../types/git';
+import { SplitPane } from '../common/SplitPane';
 import { FilterBar } from './FilterBar';
 import { CommitGraph } from './CommitGraph';
 import { CommitDetail } from './CommitDetail';
@@ -56,6 +57,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
     commits.length > 0 ? commits[0].hash : ''
   );
   const [focusToken, setFocusToken] = useState(0);
+  const [detailCollapsed, setDetailCollapsed] = useState(false);
 
   // 提取唯一分支列表和作者列表
   const branches = useMemo(() => {
@@ -131,6 +133,17 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         currentUser={currentUser}
       />
 
+      <SplitPane
+        orientation="vertical"
+        sized="end"
+        defaultSize={224}
+        min={120}
+        max={720}
+        minOther={120}
+        storageKey="easygit.log.detailHeight"
+        lockedSize={detailCollapsed ? 28 : undefined}
+        className="flex-1 min-h-0"
+        start={
       <CommitGraph
         commits={filteredCommits}
         selectedHash={selectedCommitHash}
@@ -145,9 +158,11 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         onCompareBranch={onCompareBranch}
         currentBranch={currentBranch}
       />
-
+        }
+        end={
       <CommitDetail
         commit={currentSelectedCommit}
+        onCollapsedChange={setDetailCollapsed}
         onOpenFileDiff={(path) => {
           if (currentSelectedCommit) onOpenFileDiff(currentSelectedCommit, path);
         }}
@@ -168,6 +183,8 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
           setSelectedCommitHash(found.hash);
           setFocusToken(token => token + 1);
         }}
+      />
+        }
       />
     </div>
   );

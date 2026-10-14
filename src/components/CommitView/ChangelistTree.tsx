@@ -497,7 +497,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
         const file = visibleChanges.find(item => item.id === selectedFileId);
         if (file) onToggleFileStage(file.id);
       }}
-      className="w-96 border-r border-[#393B40] bg-[#1E1F22] flex flex-col h-full select-none text-xs focus:outline-none"
+      className="flex-1 w-full h-full min-h-0 bg-[#1E1F22] flex flex-col select-none text-xs focus:outline-none"
       onClick={() => setContextMenu(null)}
     >
       {/* 顶部工具栏 (1:1 还原截图顶栏) */}

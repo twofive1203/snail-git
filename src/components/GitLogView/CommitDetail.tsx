@@ -15,6 +15,7 @@ interface CommitDetailProps {
   commit: GitCommit | null;
   onOpenFileDiff: (filePath: string) => void;
   onSelectParent?: (hash: string) => void;
+  onCollapsedChange?: (collapsed: boolean) => void;
 }
 
 const SPLIT_KEY = 'easygit.commitDetail.splitRatio';
@@ -61,6 +62,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
   commit,
   onOpenFileDiff,
   onSelectParent,
+  onCollapsedChange,
 }) => {
   const [isTreeView, setIsTreeView] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -74,6 +76,10 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
       /* 浏览器禁止本地存储时，宽度只在当前会话有效 */
     }
   }, [splitRatio]);
+
+  useEffect(() => {
+    onCollapsedChange?.(Boolean(commit) && isCollapsed);
+  }, [commit, isCollapsed, onCollapsedChange]);
 
   const startDrag = (event: React.MouseEvent) => {
     event.preventDefault();
@@ -97,7 +103,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
 
   if (!commit) {
     return (
-      <div className="h-48 border-t border-[#303236] bg-[#1E1F22] flex items-center justify-center text-xs text-[#8C9099]">
+      <div className="flex-1 h-full min-h-0 bg-[#1E1F22] flex items-center justify-center text-xs text-[#8C9099]">
         选择一个提交以查看详细信息和修改文件
       </div>
     );
@@ -118,7 +124,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
 
   if (isCollapsed) {
     return (
-      <div className="h-7 border-t border-[#303236] bg-[#1E1F22] px-3 flex items-center justify-between text-xs select-none shrink-0">
+      <div className="flex-1 h-full border-t border-[#303236] bg-[#1E1F22] px-3 flex items-center justify-between text-xs select-none">
         <div className="flex items-center space-x-2 truncate">
           <span className="font-mono text-blue-400 font-medium">{commit.shortHash}</span>
           <span className="text-[#DFE1E5] truncate font-medium">{commit.subject}</span>
@@ -136,7 +142,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
   }
 
   return (
-    <div className="h-56 border-t border-[#303236] bg-[#1E1F22] flex flex-col text-xs select-none shrink-0 relative">
+    <div className="flex-1 h-full min-h-0 bg-[#1E1F22] flex flex-col text-xs select-none overflow-hidden relative">
       <div ref={containerRef} className="flex-1 flex min-h-0 min-w-0">
         <div
           style={{ width: `calc((100% - 6px) * ${splitRatio})` }}

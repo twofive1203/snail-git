@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { FileChange } from '../../types/git';
+import { SplitPane } from '../common/SplitPane';
 import { ChangelistTree } from './ChangelistTree';
 import { SideBySideDiff } from './SideBySideDiff';
 import { CommitActionBox } from './CommitActionBox';
@@ -74,8 +75,16 @@ export const CommitView: React.FC<CommitViewProps> = ({
   const stagedCount = changes.filter(c => c.isStaged).length;
 
   return (
-    <div className="flex-1 flex h-full overflow-hidden bg-jb-bg">
-      {/* 左侧：文件变更列表树 (Default Changelist & Unversioned) */}
+    <SplitPane
+      orientation="horizontal"
+      sized="start"
+      defaultSize={384}
+      min={200}
+      max={960}
+      minOther={280}
+      storageKey="easygit.commit.treeWidth"
+      className="flex-1 h-full bg-jb-bg"
+      start={
       <ChangelistTree
         changes={changes}
         selectedFileId={selectedFileId}
@@ -97,9 +106,19 @@ export const CommitView: React.FC<CommitViewProps> = ({
         onDeleteUnversioned={onDeleteUnversioned}
         repoKey={repoKey}
       />
-
-      {/* 右侧：双栏 Diff 与 底部 Commit 操作区 */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      }
+      end={
+      <SplitPane
+        orientation="vertical"
+        sized="end"
+        defaultSize={176}
+        min={140}
+        max={520}
+        minOther={96}
+        storageKey="easygit.commit.actionHeight"
+        className="h-full w-full"
+        start={
+        <div className="flex-1 h-full min-h-0 flex flex-col overflow-hidden">
         {selectedFile?.status === 'conflict' && (
           <div className="h-8 px-3 border-b border-jb-border bg-rose-950/30 flex items-center justify-between text-xs">
             <span className="text-rose-200">这个文件有冲突，普通 diff 无法安全合并。</span>
@@ -117,7 +136,9 @@ export const CommitView: React.FC<CommitViewProps> = ({
             if (selectedFile) onRevertChunk(selectedFile, chunkId);
           }}
         />
-
+        </div>
+        }
+        end={
         <CommitActionBox
           stagedFilesCount={stagedCount}
           lastCommitMessage={lastCommitMessage}
@@ -126,7 +147,9 @@ export const CommitView: React.FC<CommitViewProps> = ({
           onShelve={onShelve}
           onCreatePatch={onCreatePatch}
         />
-      </div>
-    </div>
+        }
+      />
+      }
+    />
   );
 };

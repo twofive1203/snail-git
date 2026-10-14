@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ShelfItem, StashItem } from '../../types/git';
+import { SplitPane } from '../common/SplitPane';
 import { 
   Archive, 
   Layers, 
@@ -63,7 +64,7 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
   };
 
   return (
-    <div data-keyboard-root="shelf" tabIndex={-1} className="flex-1 flex flex-col h-full bg-jb-bg select-none text-xs focus:outline-none">
+    <div data-keyboard-root="shelf" tabIndex={-1} className="flex-1 flex flex-col h-full min-h-0 bg-jb-bg select-none text-xs focus:outline-none">
       {/* 顶部二级导航 */}
       <div className="h-9 px-3 border-b border-jb-border bg-jb-panel flex items-center justify-between">
         <div className="flex items-center space-x-1">
@@ -117,9 +118,17 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
 
       {/* 主体内容 */}
       {activeSubTab === 'shelf' ? (
-        <div className="flex-1 flex overflow-hidden">
-          {/* 左侧：架藏列表 */}
-          <div className="w-80 border-r border-jb-border bg-jb-panel/60 flex flex-col overflow-y-auto p-2 space-y-1">
+        <SplitPane
+          orientation="horizontal"
+          sized="start"
+          defaultSize={320}
+          min={180}
+          max={640}
+          minOther={240}
+          storageKey="easygit.shelf.listWidth"
+          className="flex-1 min-h-0"
+          start={
+          <div className="flex-1 h-full w-full min-h-0 bg-jb-panel/60 flex flex-col overflow-y-auto p-2 space-y-1">
             <div className="text-[11px] font-semibold text-jb-text-muted px-2 py-1 uppercase">
               Shelved Changelists
             </div>
@@ -148,9 +157,9 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
               );
             })}
           </div>
-
-          {/* 右侧：架藏详情与恢复 */}
-          <div className="flex-1 flex flex-col bg-jb-bg">
+          }
+          end={
+          <div className="flex-1 h-full min-w-0 min-h-0 flex flex-col bg-jb-bg overflow-auto">
             {selectedShelf ? (
               <div className="flex-1 flex flex-col p-4">
                 <div className="flex items-center justify-between pb-3 border-b border-jb-border">
@@ -211,7 +220,8 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
               </div>
             )}
           </div>
-        </div>
+          }
+        />
       ) : (
         /* Git Stash 视图 */
         <div className="flex-1 p-4 overflow-y-auto space-y-2">
