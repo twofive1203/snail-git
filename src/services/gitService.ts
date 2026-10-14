@@ -81,13 +81,15 @@ export interface GitProgress {
 }
 
 export interface SyncOutcome {
-  status: 'ok' | 'up_to_date' | 'needs_confirm' | string;
+  status: 'ok' | 'up_to_date' | 'needs_confirm' | 'cancelled' | 'blocked' | string;
   message: string;
   ahead: number;
   behind: number;
   remote: string;
   branch: string;
   conflictingPaths: string[];
+  /** 后端探测出的本次集成方式：merge / rebase，用于提示文案。 */
+  strategy?: string;
 }
 
 export async function listenGitProgress(cb: (event: GitProgress) => void): Promise<() => void> {
@@ -150,8 +152,11 @@ export async function rebaseOnto(repoPath: string, name: string): Promise<string
   return invokeTauri<string>('rebase_onto', { repoPath, name });
 }
 
-export async function updateRepo(repoPath: string, confirmRisk: boolean): Promise<SyncOutcome> {
-  return invokeTauri<SyncOutcome>('update_repo', { repoPath, confirmRisk });
+/** response: probe=首次尝试，stash=贮藏本地改动后重试，continue=带着本地改动继续，abort=取消。 */
+export type UpdateResponse = 'probe' | 'stash' | 'continue' | 'abort';
+
+export async function updateRepo(repoPath: string, response: UpdateResponse = 'probe'): Promise<SyncOutcome> {
+  return invokeTauri<SyncOutcome>('update_repo', { repoPath, response });
 }
 
 export async function pushRepo(repoPath: string, allowSetUpstream = false): Promise<SyncOutcome> {

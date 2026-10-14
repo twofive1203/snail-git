@@ -199,10 +199,19 @@ fn emit_git_progress(app: &AppHandle, repo_path: &str, line: &str) {
     );
 }
 
+/// `response`: probe=首次尝试，stash=贮藏本地改动后重试，continue=带着本地改动继续，abort=用户取消。
 #[tauri::command]
-fn update_repo(app: AppHandle, repo_path: String, confirm_risk: bool) -> Result<git_ops::SyncOutcome, String> {
+fn update_repo(
+    app: AppHandle,
+    repo_path: String,
+    response: Option<String>,
+    confirm_risk: Option<bool>,
+) -> Result<git_ops::SyncOutcome, String> {
     let repo = repo_path.clone();
-    git_ops::update_repo(&repo_path, confirm_risk, &mut |line| emit_git_progress(&app, &repo, line))
+    let response = response.unwrap_or_else(|| if confirm_risk.unwrap_or(false) { "continue".into() } else { "probe".into() });
+    git_ops::update_repo(&repo_path, confirm_risk.unwrap_or(false), &response, &mut |line| {
+        emit_git_progress(&app, &repo, line)
+    })
 }
 
 #[tauri::command]

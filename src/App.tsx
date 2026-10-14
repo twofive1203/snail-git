@@ -13,7 +13,7 @@ import { WindowResizeFrame } from './components/WindowControls';
 import { ShelveDialog } from './components/ShelfStashView/ShelveDialog';
 import { AddProjectModal } from './components/ProjectSidebar/AddProjectModal';
 import { DiffChunk, FileChange, GitRepository, RevisionFile, StashItem } from './types/git';
-import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2 } from 'lucide-react';
+import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive, GitPullRequest, ArrowUp } from 'lucide-react';
 import {
   addSavedRepo,
   appendGitignore,
@@ -65,6 +65,7 @@ import {
   unstagePaths,
   updateRepo,
   type SyncOutcome,
+  type UpdateResponse,
 } from './services/gitService';
 import {
   mockBranches,
@@ -74,6 +75,32 @@ import {
   mockShelves,
   mockStashes,
 } from './mock/gitData';
+import { ConfirmDialog, type ConfirmAction } from './components/common/ConfirmDialog';
+
+/** 更新/推送被后端拦下时的确认框状态；等待用户选择期间操作锁已释放。 */
+interface PendingConfirm {
+  kind: 'update' | 'push';
+  repoPath: string;
+  outcome: SyncOutcome;
+}
+
+/** 合并策略下的真实冲突：两种做法都是安全的（贮藏可回滚），所以推荐“贮藏后更新”。 */
+const confirmActions = (pending: PendingConfirm | null): ConfirmAction[] => {
+  if (!pending) return [];
+  if (pending.kind === 'push') {
+    return [{ value: 'continue', label: '确认并推送', tone: 'primary', icon: <ArrowUp className="w-3.5 h-3.5" /> }];
+  }
+  const outcome = pending.outcome;
+  if (outcome.strategy && outcome.strategy !== 'merge') {
+    return [
+      { value: 'continue', label: '仍然变基', tone: 'primary', icon: <GitPullRequest className="w-3.5 h-3.5" /> },
+    ];
+  }
+  return [
+    { value: 'stash', label: '贮藏后更新（推荐）', tone: 'primary', icon: <Archive className="w-3.5 h-3.5" /> },
+    { value: 'continue', label: '不贮藏，直接更新', tone: 'default', icon: <GitMerge className="w-3.5 h-3.5" /> },
+  ];
+};
 
 export function App() {
   const [native, setNative] = useState(() => isTauriEnvironment());
@@ -110,6 +137,7 @@ export function App() {
   const [diffFiles, setDiffFiles] = useState<RevisionFile[]>([]);
   const diffLoader = useRef<(path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>>(async () => []);
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [opsLocked, setOpsLocked] = useState(false);
   const refreshLock = useRef(false);
@@ -234,7 +262,9 @@ export function App() {
 
   const finishNetwork = async (repoPath: string, outcome: SyncOutcome) => {
     applySyncCounts(repoPath, outcome);
-    showToast(outcome.message || '完成');
+    // blocked 表示这次操作根本没生效，不能拿成功图标糊弄用户。
+    const failed = outcome.status === 'blocked' || outcome.status === 'failed';
+    showToast(outcome.message || '完成', failed);
     acceptProgress.current = false;
     setBusyLabel(null);
     await refresh(repoPath);
@@ -242,21 +272,14 @@ export function App() {
 
   const handleUpdate = useCallback(() => {
     void guardNetwork('update', async (repoPath) => {
-      let outcome = await updateRepo(repoPath, false);
+      const outcome = await updateRepo(repoPath, 'probe');
       if (outcome.status === 'needs_confirm') {
+        // 释放锁并把选择权交给弹窗：等待用户期间不阻塞其他操作。
         acceptProgress.current = false;
         setBusyLabel(null);
         setSyncAction(null);
-        if (!window.confirm(outcome.message)) {
-          applySyncCounts(repoPath, outcome);
-          showToast('已取消更新');
-          await refresh(repoPath);
-          return;
-        }
-        setSyncAction('update');
-        acceptProgress.current = true;
-        setBusyLabel('正在合并远程更新…');
-        outcome = await updateRepo(repoPath, true);
+        setPendingConfirm({ kind: 'update', repoPath, outcome });
+        return;
       }
       await finishNetwork(repoPath, outcome);
     });
@@ -264,23 +287,54 @@ export function App() {
 
   const handlePush = useCallback(() => {
     void guardNetwork('push', async (repoPath) => {
-      let outcome = await pushRepo(repoPath, false);
+      const outcome = await pushRepo(repoPath, false);
       if (outcome.status === 'needs_confirm') {
         acceptProgress.current = false;
         setBusyLabel(null);
         setSyncAction(null);
-        if (!window.confirm(outcome.message)) {
-          showToast('已取消推送');
-          return;
-        }
-        setSyncAction('push');
-        acceptProgress.current = true;
-        setBusyLabel(`正在推送到 ${outcome.remote}/${outcome.branch}…`);
-        outcome = await pushRepo(repoPath, true);
+        setPendingConfirm({ kind: 'push', repoPath, outcome });
+        return;
       }
       await finishNetwork(repoPath, outcome);
     });
   }, [guardNetwork, refresh]);
+
+  const cancelConfirm = useCallback(() => {
+    setPendingConfirm(null);
+    showToast('已取消');
+  }, []);
+
+  const chooseConfirm = useCallback((value: string) => {
+    const pending = pendingConfirm;
+    if (!pending) return;
+    setPendingConfirm(null);
+    if (pending.kind === 'push') {
+      // 推进程的确认只有“继续”一种意思，其余选项都在弹窗里带 cancel。
+      void guardNetwork('push', async (repoPath) => {
+        const outcome = await pushRepo(repoPath, true);
+        await finishNetwork(repoPath, outcome);
+      });
+      return;
+    }
+    void guardNetwork('update', async (repoPath) => {
+      const outcome = await updateRepo(repoPath, value as UpdateResponse);
+      if (outcome.status === 'cancelled') {
+        showToast('已取消更新');
+        await refresh(repoPath);
+        return;
+      }
+      if (outcome.status === 'needs_confirm') {
+        // 变基的脏工作区提醒是二次确认，再弹一次即可。
+        acceptProgress.current = false;
+        setBusyLabel(null);
+        setSyncAction(null);
+        setPendingConfirm({ kind: 'update', repoPath, outcome });
+        return;
+      }
+      // blocked：这次更新没生效，finishNetwork 会按失败提示。
+      await finishNetwork(repoPath, outcome);
+    });
+  }, [pendingConfirm, guardNetwork, refresh]);
 
   const handleFetch = useCallback(() => {
     void guardNetwork('fetch', async (repoPath) => {
@@ -932,6 +986,17 @@ export function App() {
           <span className="font-medium break-all">{toast.text}</span>
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(pendingConfirm)}
+        title={pendingConfirm?.kind === 'push' ? '推送需要确认' : '更新需要确认'}
+        message={pendingConfirm?.outcome.message || ''}
+        files={pendingConfirm?.outcome.conflictingPaths}
+        filesHint={pendingConfirm?.kind === 'push' ? '以下文件将写入上游配置' : undefined}
+        actions={confirmActions(pendingConfirm)}
+        onChoose={chooseConfirm}
+        onCancel={cancelConfirm}
+      />
     </div>
   );
 }
