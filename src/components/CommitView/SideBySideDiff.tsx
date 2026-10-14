@@ -21,6 +21,20 @@ interface SideBySideDiffProps {
   onIgnoreWhitespaceChange?: (value: boolean) => void;
 }
 
+interface DiffRow {
+  key: string;
+  chunkIndex: number;
+  chunkId: string;
+  isStaged: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  line: DiffLine;
+}
+
 function WordText({ spans, side }: { spans: NonNullable<DiffLine['wordDiff']>; side: 'old' | 'new' }) {
   return (
     <span>
@@ -40,6 +54,118 @@ function WordText({ spans, side }: { spans: NonNullable<DiffLine['wordDiff']>; s
   );
 }
 
+function activeShadow(active: boolean, isFirst: boolean, isLast: boolean, stagedLeft: boolean): React.CSSProperties | undefined {
+  const parts: string[] = [];
+  if (active) parts.push('inset 0 0 0 9999px rgba(53,116,240,0.07)');
+  if (active && isFirst) parts.push('inset 0 1px 0 0 rgba(53,116,240,0.5)');
+  if (active && isLast) parts.push('inset 0 -1px 0 0 rgba(53,116,240,0.5)');
+  if (stagedLeft) parts.push('inset 2px 0 0 0 rgba(89,168,105,0.75)');
+  if (parts.length === 0) return undefined;
+  return { boxShadow: parts.join(', ') };
+}
+
+function lineTone(line: DiffLine, pane: 'left' | 'right'): string {
+  const isAdd = line.type === 'added';
+  const isDel = line.type === 'deleted';
+  const isMod = line.type === 'modified';
+  if (pane === 'left') {
+    if (isDel || isMod) return 'bg-rose-950/35 text-rose-100';
+    if (isAdd) return 'bg-emerald-950/10';
+    return '';
+  }
+  if (isAdd || isMod) return 'bg-emerald-950/35 text-emerald-100';
+  if (isDel) return 'bg-rose-950/10';
+  return '';
+}
+
+function PaneLine({
+  row,
+  pane,
+  active,
+  lineRef,
+}: {
+  row: DiffRow;
+  pane: 'left' | 'right';
+  active: boolean;
+  lineRef?: (node: HTMLDivElement | null) => void;
+}) {
+  const line = row.line;
+  const content = pane === 'left' ? (line.oldContent || '') : (line.newContent || '');
+  const wordDiff = pane === 'left' ? line.oldWordDiff : line.wordDiff;
+  const lineNumber = pane === 'left' ? line.oldLineNumber : line.newLineNumber;
+
+  return (
+    <div
+      ref={lineRef}
+      data-chunk-index={row.chunkIndex}
+      className={`flex h-5 leading-5 shrink-0 ${lineTone(line, pane)}`}
+      style={activeShadow(active, row.isFirst, row.isLast, pane === 'left' && row.isStaged)}
+    >
+      <div className="sticky left-0 z-10 w-10 shrink-0 px-1 text-right text-jb-text-muted bg-jb-panel border-r border-jb-border/40 select-none">
+        {lineNumber || ''}
+      </div>
+      <div className="whitespace-pre px-3">
+        {wordDiff ? <WordText spans={wordDiff} side={pane === 'left' ? 'old' : 'new'} /> : content}
+      </div>
+    </div>
+  );
+}
+
+function GutterLine({
+  row,
+  active,
+  showActions,
+  onStage,
+  onRevert,
+}: {
+  row: DiffRow;
+  active: boolean;
+  showActions: boolean;
+  onStage: () => void;
+  onRevert: () => void;
+}) {
+  const isAdd = row.line.type === 'added';
+  const isDel = row.line.type === 'deleted';
+  const isMod = row.line.type === 'modified';
+  const tone = isAdd ? 'bg-emerald-950/10' : isDel ? 'bg-rose-950/10' : isMod ? 'bg-blue-950/15' : '';
+
+  return (
+    <div
+      data-chunk-index={row.chunkIndex}
+      title={row.isFirst ? `@@ -${row.oldStart},${row.oldLines} +${row.newStart},${row.newLines} @@` : undefined}
+      className={`relative h-5 shrink-0 ${tone} ${showActions ? 'z-20' : ''}`}
+      style={activeShadow(active, row.isFirst, row.isLast, false)}
+    >
+      {showActions && (
+        <div className="absolute left-1/2 top-0.5 z-20 -translate-x-1/2 flex flex-col gap-0.5">
+          <button
+            onClick={onStage}
+            title={`${row.isStaged ? '取消暂存此块' : '应用此块暂存'}（@@ -${row.oldStart},${row.oldLines} +${row.newStart},${row.newLines}）`}
+            className="w-5 h-5 rounded border border-jb-blue/40 bg-jb-panel/95 text-jb-blue hover:bg-jb-blue/20 flex items-center justify-center shadow-sm"
+          >
+            <ChevronsRight className="w-3 h-3" />
+          </button>
+          <button
+            onClick={onRevert}
+            title="回滚丢弃此块变更"
+            className="w-5 h-5 rounded border border-rose-500/40 bg-jb-panel/95 text-rose-300 hover:bg-rose-500/20 flex items-center justify-center shadow-sm"
+          >
+            <Undo2 className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+      {row.isFirst && (
+        <span className="pointer-events-none absolute top-0 inset-x-0 text-center text-[8px] leading-none text-[#6F737A] font-mono">@@</span>
+      )}
+      <div className="h-5 flex items-center justify-center select-none">
+        {isAdd && <span className="text-jb-green font-bold text-xs leading-none">+</span>}
+        {isDel && <span className="text-jb-red font-bold text-xs leading-none">-</span>}
+        {isMod && <span className="text-jb-blue font-bold text-xs leading-none">~</span>}
+      </div>
+    </div>
+  );
+}
+
 export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   file,
   onToggleChunkStage,
@@ -53,7 +179,13 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   const [ignoreWhitespaceLocal, setIgnoreWhitespaceLocal] = useState(false);
   const ignoreWhitespace = ignoreWhitespaceProp ?? ignoreWhitespaceLocal;
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
+  const [hoveredChunk, setHoveredChunk] = useState<number | null>(null);
   const chunkRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const leftRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const unifiedRef = useRef<HTMLDivElement>(null);
+  const syncLock = useRef(false);
   const chunks = (file?.chunks ?? []).map(chunk => ({
     ...chunk,
     lines: ignoreWhitespace
@@ -63,9 +195,33 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
         })
       : chunk.lines,
   }));
+  const rows: DiffRow[] = [];
+  chunks.forEach((chunk, chunkIndex) => {
+    chunk.lines.forEach((line, lineIndex) => {
+      rows.push({
+        key: `${chunk.id}-${lineIndex}`,
+        chunkIndex,
+        chunkId: chunk.id,
+        isStaged: chunk.isStaged,
+        isFirst: lineIndex === 0,
+        isLast: lineIndex === chunk.lines.length - 1,
+        oldStart: chunk.oldStart,
+        oldLines: chunk.oldLines,
+        newStart: chunk.newStart,
+        newLines: chunk.newLines,
+        line,
+      });
+    });
+  });
 
   useEffect(() => {
     setCurrentChunkIndex(0);
+    setHoveredChunk(null);
+    for (const el of [leftRef.current, rightRef.current, gutterRef.current, unifiedRef.current]) {
+      if (!el) continue;
+      el.scrollTop = 0;
+      el.scrollLeft = 0;
+    }
   }, [file?.id]);
 
   useEffect(() => {
@@ -85,15 +241,43 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
 
   useEffect(() => {
     const node = chunkRefs.current[currentChunkIndex];
-    if (!node) return;
-    const scroller = node.closest('.overflow-auto') as HTMLElement | null;
-    if (!scroller) {
-      node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
-      return;
-    }
-    const delta = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - Math.max(24, (scroller.clientHeight - node.clientHeight) / 3);
+    const scroller = isUnified ? unifiedRef.current : rightRef.current;
+    if (!node || !scroller) return;
+    const top = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    const delta = top - Math.max(24, (scroller.clientHeight - node.clientHeight) / 3);
     scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: 'smooth' });
-  }, [currentChunkIndex, file?.id]);
+  }, [currentChunkIndex, file?.id, isUnified, chunks.length]);
+
+  // 左右是两个窗口：横滚按相同像素互相同步；纵滚三列一起走，避免增删行错位。
+  // 锁放到微任务再放开，挡住赋值触发的同步 scroll 回声，避免一侧滚到底后把另一侧拽回来。
+  const syncFrom = (source: 'left' | 'right' | 'gutter') => {
+    if (syncLock.current) return;
+    const left = leftRef.current;
+    const right = rightRef.current;
+    const gutter = gutterRef.current;
+    if (!left || !right || !gutter) return;
+    const from = source === 'left' ? left : source === 'right' ? right : gutter;
+    syncLock.current = true;
+    const y = from.scrollTop;
+    if (left.scrollTop !== y) left.scrollTop = y;
+    if (right.scrollTop !== y) right.scrollTop = y;
+    if (gutter.scrollTop !== y) gutter.scrollTop = y;
+    if (source !== 'gutter') {
+      const x = from.scrollLeft;
+      if (left.scrollLeft !== x) left.scrollLeft = x;
+      if (right.scrollLeft !== x) right.scrollLeft = x;
+    }
+    queueMicrotask(() => {
+      syncLock.current = false;
+    });
+  };
+
+  const onPaneMouseOver = (event: React.MouseEvent) => {
+    const el = (event.target as HTMLElement).closest('[data-chunk-index]');
+    const raw = el?.getAttribute('data-chunk-index');
+    const next = raw == null ? null : Number(raw);
+    setHoveredChunk(prev => (prev === next ? prev : next));
+  };
 
   if (!file) {
     return (
@@ -181,8 +365,8 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
       </div>
 
       {/* Diff 内容视图区域 */}
-      <div className="flex-1 overflow-auto font-mono text-xs text-jb-text-code">
-        {chunks.length === 0 ? (
+      {chunks.length === 0 ? (
+        <div className="flex-1 overflow-auto font-mono text-xs text-jb-text-code">
           <div className="p-8 flex flex-col items-center justify-center text-center space-y-3">
             <div className="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-400">
               <Code2 className="w-5 h-5" />
@@ -205,103 +389,125 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
               </span>
             </div>
           </div>
-        ) : (
-          chunks.map((chunk, cIdx) => (
-            <div 
-              key={chunk.id}
-              ref={(node) => { chunkRefs.current[cIdx] = node; }}
-              className={`relative group/chunk scroll-mt-4 ${chunk.isStaged ? 'border-l-2 border-l-emerald-500/70' : ''} ${
-                cIdx === currentChunkIndex ? 'bg-jb-blue/[0.07] ring-1 ring-inset ring-jb-blue/30' : ''
-              }`}
-            >
-              {!readOnly && (
-                <div className={`absolute top-0.5 z-20 flex flex-col gap-0.5 opacity-0 pointer-events-none group-hover/chunk:opacity-100 group-hover/chunk:pointer-events-auto ${isUnified ? 'left-20' : 'left-1/2 -translate-x-1/2'}`}>
-                  <button
-                    onClick={() => onToggleChunkStage(chunk.id)}
-                    title={`${chunk.isStaged ? '取消暂存此块' : '应用此块暂存'}（@@ -${chunk.oldStart},${chunk.oldLines} +${chunk.newStart},${chunk.newLines}）`}
-                    className="w-5 h-5 rounded border border-jb-blue/40 bg-jb-panel/95 text-jb-blue hover:bg-jb-blue/20 flex items-center justify-center shadow-sm"
-                  >
-                    <ChevronsRight className="w-3 h-3" />
-                  </button>
-                  <button
-                    onClick={() => onRevertChunk(chunk.id)}
-                    title="回滚丢弃此块变更"
-                    className="w-5 h-5 rounded border border-rose-500/40 bg-jb-panel/95 text-rose-300 hover:bg-rose-500/20 flex items-center justify-center shadow-sm"
-                  >
-                    <Undo2 className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
-
-              <div>
+        </div>
+      ) : isUnified ? (
+        <div ref={unifiedRef} className="flex-1 min-h-0 min-w-0 overflow-x-scroll overflow-y-auto overscroll-contain font-mono text-xs text-jb-text-code">
+          <div className="flex flex-col w-max min-w-full">
+            {chunks.map((chunk, cIdx) => (
+              <div
+                key={chunk.id}
+                ref={(node) => { chunkRefs.current[cIdx] = node; }}
+                className={`relative group/chunk ${
+                  cIdx === currentChunkIndex ? 'bg-jb-blue/[0.07] ring-1 ring-inset ring-jb-blue/30' : ''
+                }`}
+                style={chunk.isStaged ? { boxShadow: 'inset 2px 0 0 0 rgba(89,168,105,0.75)' } : undefined}
+              >
+                {!readOnly && (
+                  <div className="absolute top-0.5 left-20 z-20 flex flex-col gap-0.5 opacity-0 pointer-events-none group-hover/chunk:opacity-100 group-hover/chunk:pointer-events-auto">
+                    <button
+                      onClick={() => onToggleChunkStage(chunk.id)}
+                      title={`${chunk.isStaged ? '取消暂存此块' : '应用此块暂存'}（@@ -${chunk.oldStart},${chunk.oldLines} +${chunk.newStart},${chunk.newLines}）`}
+                      className="w-5 h-5 rounded border border-jb-blue/40 bg-jb-panel/95 text-jb-blue hover:bg-jb-blue/20 flex items-center justify-center shadow-sm"
+                    >
+                      <ChevronsRight className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => onRevertChunk(chunk.id)}
+                      title="回滚丢弃此块变更"
+                      className="w-5 h-5 rounded border border-rose-500/40 bg-jb-panel/95 text-rose-300 hover:bg-rose-500/20 flex items-center justify-center shadow-sm"
+                    >
+                      <Undo2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
                 {chunk.lines.map((line, lIdx) => {
                   const isAdd = line.type === 'added';
                   const isDel = line.type === 'deleted';
                   const isMod = line.type === 'modified';
-
+                  const tone = isAdd ? 'bg-emerald-950/25 text-emerald-200' : isDel ? 'bg-rose-950/25 text-rose-200' : isMod ? 'bg-blue-950/25' : '';
                   return (
-                    <div 
-                      key={lIdx}
-                      className={`${isUnified ? 'grid-cols-[3rem_3rem_1fr]' : 'grid-cols-[1fr,40px,1fr]'} grid min-h-[20px] leading-5 items-stretch ${
-                        isAdd ? 'bg-emerald-950/25' :
-                        isDel ? 'bg-rose-950/25' :
-                        isMod ? 'bg-blue-950/25' : ''
-                      }`}
-                    >
-                      {isUnified ? (
-                        <>
-                          <div className="px-2 text-right text-jb-text-muted bg-jb-panel/30 select-none border-r border-jb-border/30">
-                            {line.oldLineNumber || ''}
-                          </div>
-                          <div className="px-2 text-right text-jb-text-muted bg-jb-panel/30 select-none border-r border-jb-border/30">
-                            {line.newLineNumber || ''}
-                          </div>
-                          <div className={`px-3 whitespace-pre overflow-x-auto ${isDel ? 'text-rose-200' : isAdd ? 'text-emerald-200' : ''}`}>
-                            <span className="inline-block w-4 text-jb-text-muted">{isAdd ? '+' : isDel ? '-' : ' '}</span>
-                            {line.wordDiff ? <WordText spans={line.wordDiff} side="new" /> : (line.newContent ?? line.oldContent ?? '')}
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                      <div className={`flex border-r border-jb-border/40 ${isDel || isMod ? 'bg-rose-950/20 text-rose-100' : ''}`}>
-                        <div className="w-10 px-2 text-right text-jb-text-muted bg-jb-panel/30 select-none border-r border-jb-border/30">
+                    <div key={lIdx} className={`flex h-5 leading-5 shrink-0 ${tone}`}>
+                      <div className="sticky left-0 z-10 flex shrink-0">
+                        <div className="w-12 px-2 text-right text-jb-text-muted bg-jb-panel border-r border-jb-border/40 select-none">
                           {line.oldLineNumber || ''}
                         </div>
-                        <div className="px-3 whitespace-pre overflow-x-auto flex-1">
-                          {line.oldWordDiff ? <WordText spans={line.oldWordDiff} side="old" /> : (line.oldContent || '')}
-                        </div>
-                      </div>
-
-                      <div
-                        title={lIdx === 0 ? `@@ -${chunk.oldStart},${chunk.oldLines} +${chunk.newStart},${chunk.newLines} @@` : undefined}
-                        className="relative flex flex-col items-center justify-center bg-jb-panel/40 border-r border-jb-border/40 select-none"
-                      >
-                        {lIdx === 0 && (
-                          <span className="text-[8px] leading-none text-[#6F737A] font-mono">@@</span>
-                        )}
-                        {isAdd && <span className="text-jb-green font-bold text-xs leading-none">+</span>}
-                        {isDel && <span className="text-jb-red font-bold text-xs leading-none">-</span>}
-                        {isMod && <span className="text-jb-blue font-bold text-xs leading-none">~</span>}
-                      </div>
-
-                      <div className={`flex ${isAdd || isMod ? 'bg-emerald-950/20 text-emerald-100' : ''}`}>
-                        <div className="w-10 px-2 text-right text-jb-text-muted bg-jb-panel/30 select-none border-r border-jb-border/30">
+                        <div className="w-12 px-2 text-right text-jb-text-muted bg-jb-panel border-r border-jb-border/40 select-none">
                           {line.newLineNumber || ''}
                         </div>
-                        <div className="px-3 whitespace-pre overflow-x-auto flex-1">
-                          {line.wordDiff ? <WordText spans={line.wordDiff} side="new" /> : (line.newContent || '')}
-                        </div>
                       </div>
-                        </>
-                      )}
+                      <div className="whitespace-pre px-3">
+                        <span className="inline-block w-4 text-jb-text-muted">{isAdd ? '+' : isDel ? '-' : ' '}</span>
+                        {line.wordDiff ? <WordText spans={line.wordDiff} side="new" /> : (line.newContent ?? line.oldContent ?? '')}
+                      </div>
                     </div>
                   );
                 })}
               </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div
+          className="flex-1 min-h-0 min-w-0 flex overflow-hidden font-mono text-xs text-jb-text-code"
+          onMouseOver={onPaneMouseOver}
+          onMouseLeave={() => setHoveredChunk(null)}
+        >
+          <div
+            ref={leftRef}
+            onScroll={() => syncFrom('left')}
+            className="diff-pane-sync diff-pane-sync-hide-y flex-1 min-w-0 min-h-0"
+          >
+            <div className="flex flex-col w-max min-w-full">
+              {rows.map(row => (
+                <PaneLine
+                  key={row.key}
+                  row={row}
+                  pane="left"
+                  active={row.chunkIndex === currentChunkIndex}
+                />
+              ))}
             </div>
-          ))
-        )}
-      </div>
+          </div>
+
+          <div className="w-10 shrink-0 flex flex-col min-h-0 border-x border-jb-border/40">
+            <div
+              ref={gutterRef}
+              onScroll={() => syncFrom('gutter')}
+              className="diff-gutter-sync flex-1 min-h-0"
+            >
+              {rows.map(row => (
+                <GutterLine
+                  key={row.key}
+                  row={row}
+                  active={row.chunkIndex === currentChunkIndex}
+                  showActions={!readOnly && row.isFirst && hoveredChunk === row.chunkIndex}
+                  onStage={() => onToggleChunkStage(row.chunkId)}
+                  onRevert={() => onRevertChunk(row.chunkId)}
+                />
+              ))}
+            </div>
+            <div className="diff-scrollbar-spacer bg-jb-bg" />
+          </div>
+
+          <div
+            ref={rightRef}
+            onScroll={() => syncFrom('right')}
+            className="diff-pane-sync flex-1 min-w-0 min-h-0"
+          >
+            <div className="flex flex-col w-max min-w-full">
+              {rows.map(row => (
+                <PaneLine
+                  key={row.key}
+                  row={row}
+                  pane="right"
+                  active={row.chunkIndex === currentChunkIndex}
+                  lineRef={row.isFirst ? (node) => { chunkRefs.current[row.chunkIndex] = node; } : undefined}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

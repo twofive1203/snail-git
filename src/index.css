@@ -2,10 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 滚动条厚度与双栏 Diff 中缝占位共用，避免左右行对齐漂移 */
+:root {
+  --diff-scrollbar-size: 8px;
+}
+
 /* JetBrains 风格经典无缝暗黑细滚动条 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: var(--diff-scrollbar-size);
+  height: var(--diff-scrollbar-size);
 }
 
 ::-webkit-scrollbar-track {
@@ -30,4 +35,43 @@ button:focus-visible {
 /* 代码字体平滑渲染 */
 .font-mono {
   font-variant-ligatures: normal;
+}
+
+/* 双栏左窗：保留横向滚动条，纵向滚动条宽度压成 0（仍可滚，由右侧竖条驱动） */
+.diff-pane-sync {
+  overflow-x: scroll;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.diff-pane-sync-hide-y::-webkit-scrollbar {
+  width: 0;
+  height: var(--diff-scrollbar-size);
+}
+
+.diff-pane-sync-hide-y::-webkit-scrollbar:vertical {
+  width: 0;
+}
+
+.diff-pane-sync-hide-y::-webkit-scrollbar:horizontal {
+  height: var(--diff-scrollbar-size);
+}
+
+/* 中缝只跟纵滚，不出现滚动条 */
+.diff-gutter-sync {
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.diff-gutter-sync::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* 与左右窗口底部横向滚动条同高，保证中缝可视高度一致 */
+.diff-scrollbar-spacer {
+  height: var(--diff-scrollbar-size);
+  flex-shrink: 0;
 }
