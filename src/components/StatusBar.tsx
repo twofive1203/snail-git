@@ -36,8 +36,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         >
           <GitBranch className="w-3 h-3 text-[#3574F0]" />
           <span className="font-mono text-[#589DF6]">{currentBranch}</span>
-          {aheadCount > 0 && <span className="text-blue-400 font-mono text-[10px]">↑{aheadCount}</span>}
-          {behindCount > 0 && <span className="text-amber-400 font-mono text-[10px]">↓{behindCount}</span>}
+          {aheadCount > 0 && <span className="px-1 rounded bg-blue-500/15 text-blue-300 font-mono text-[10px]">↑{aheadCount}</span>}
+          {behindCount > 0 && <span className="px-1 rounded bg-amber-500/15 text-amber-300 font-mono text-[10px]">↓{behindCount}</span>}
         </button>
 
         <span className="h-3 w-px bg-[#303236]" />

@@ -14,6 +14,9 @@ interface GitLogViewProps {
   onRevert?: (hash: string) => void;
   onReset?: (hash: string) => void;
   onCreateBranch?: (hash: string) => void;
+  onCompareBranch?: (name: string) => void;
+  currentBranch?: string;
+  currentUser?: string;
 }
 
 function matchesDate(date: string, range: string): boolean {
@@ -40,6 +43,9 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   onRevert,
   onReset,
   onCreateBranch,
+  onCompareBranch,
+  currentBranch = '',
+  currentUser = '',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranch, setSelectedBranch] = useState('All');
@@ -49,6 +55,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   const [selectedCommitHash, setSelectedCommitHash] = useState<string>(
     commits.length > 0 ? commits[0].hash : ''
   );
+  const [focusToken, setFocusToken] = useState(0);
 
   // 提取唯一分支列表和作者列表
   const branches = useMemo(() => {
@@ -107,7 +114,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   }, [commits, selectedCommitHash]);
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-jb-bg">
+    <div data-keyboard-root="log" tabIndex={-1} className="flex-1 flex flex-col h-full overflow-hidden bg-jb-bg focus:outline-none">
       <FilterBar
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -121,11 +128,13 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         onPathChange={setPathQuery}
         branches={branches}
         authors={authors}
+        currentUser={currentUser}
       />
 
       <CommitGraph
         commits={filteredCommits}
         selectedHash={selectedCommitHash}
+        focusToken={focusToken}
         onSelectCommit={(commit) => setSelectedCommitHash(commit.hash)}
         onViewDiff={(commit) => onShowDiffWithLocal?.(commit)}
         onCheckout={onCheckout}
@@ -133,6 +142,8 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         onRevert={onRevert}
         onReset={onReset}
         onCreateBranch={onCreateBranch}
+        onCompareBranch={onCompareBranch}
+        currentBranch={currentBranch}
       />
 
       <CommitDetail
@@ -142,8 +153,20 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         }}
         onSelectParent={(hash) => {
           const found = commits.find(commit => commit.hash === hash || commit.hash.startsWith(hash) || hash.startsWith(commit.hash));
-          if (found) setSelectedCommitHash(found.hash);
-          else onParentMissing?.(hash);
+          if (!found) {
+            onParentMissing?.(hash);
+            return;
+          }
+          const visible = filteredCommits.some(commit => commit.hash === found.hash);
+          if (!visible) {
+            setSearchQuery('');
+            setSelectedBranch('All');
+            setSelectedAuthor('All');
+            setSelectedDate('All');
+            setPathQuery('');
+          }
+          setSelectedCommitHash(found.hash);
+          setFocusToken(token => token + 1);
         }}
       />
     </div>

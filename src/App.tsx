@@ -2,17 +2,21 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Header } from './components/Header';
 import { ActiveTab } from './components/TabBar';
 import { GitLogView } from './components/GitLogView';
+import type { SyncAction } from './components/Header';
 import { CommitView } from './components/CommitView';
 import { BranchesModal } from './components/BranchesModal';
 import { ShelfStashView } from './components/ShelfStashView';
 import { ThreeWayMergeModal } from './components/ThreeWayMergeModal';
 import { DiffModal } from './components/DiffModal';
 import { StatusBar } from './components/StatusBar';
+import { WindowResizeFrame } from './components/WindowControls';
+import { ShelveDialog } from './components/ShelfStashView/ShelveDialog';
 import { AddProjectModal } from './components/ProjectSidebar/AddProjectModal';
 import { DiffChunk, FileChange, GitRepository, RevisionFile, StashItem } from './types/git';
 import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2 } from 'lucide-react';
 import {
   addSavedRepo,
+  appendGitignore,
   applyChunk,
   checkoutBranch,
   cherryPick,
@@ -22,6 +26,7 @@ import {
   createShelf,
   deleteBranch,
   deleteShelf,
+  deleteUnversioned,
   discardPaths,
   fetchRepo,
   inspectFile,
@@ -80,6 +85,9 @@ export function App() {
   const [currentBranch, setCurrentBranch] = useState(activeRepo?.currentBranch || 'main');
   const [aheadCount, setAheadCount] = useState(0);
   const [behindCount, setBehindCount] = useState(0);
+  const [currentUser, setCurrentUser] = useState(native ? '' : 'Li Chong');
+  const [syncAction, setSyncAction] = useState<SyncAction | null>(null);
+  const [shelveDraft, setShelveDraft] = useState<{ paths: string[]; count: number; includesUnstaged: boolean } | null>(null);
   const [gitVersion, setGitVersion] = useState(native ? 'Git' : '未连接 Git');
   const [branches, setBranches] = useState(native ? [] : mockBranches);
   const [commits, setCommits] = useState(native ? [] : mockCommits);
@@ -121,6 +129,7 @@ export function App() {
     setAheadCount(snap.aheadCount);
     setBehindCount(snap.behindCount);
     setGitVersion(snap.gitVersion || 'Git');
+    setCurrentUser(snap.userName || '');
     setChanges(snap.changes);
     setCommits(snap.commits);
     setBranches(snap.branches);
@@ -173,6 +182,7 @@ export function App() {
     opLock.current = false;
     setOpsLocked(false);
     setBusyLabel(null);
+    setSyncAction(null);
   };
 
   const run = useCallback(async (label: string, action: () => Promise<string | void>) => {
@@ -198,7 +208,7 @@ export function App() {
     }
   }, [activeRepo, refresh]);
 
-  const guardNetwork = useCallback(async (action: (repoPath: string) => Promise<void>) => {
+  const guardNetwork = useCallback(async (kind: SyncAction, action: (repoPath: string) => Promise<void>) => {
     if (!isTauriEnvironment() || !activeRepo) {
       showToast('浏览器预览不会改动真实仓库，请用 pnpm tauri dev', true);
       return;
@@ -207,6 +217,7 @@ export function App() {
     const repoPath = activeRepo.path;
     opLock.current = true;
     setOpsLocked(true);
+    setSyncAction(kind);
     setBusyLabel('正在连接远程，若弹出登录窗口请完成登录');
     acceptProgress.current = true;
     try {
@@ -230,17 +241,19 @@ export function App() {
   };
 
   const handleUpdate = useCallback(() => {
-    void guardNetwork(async (repoPath) => {
+    void guardNetwork('update', async (repoPath) => {
       let outcome = await updateRepo(repoPath, false);
       if (outcome.status === 'needs_confirm') {
         acceptProgress.current = false;
         setBusyLabel(null);
+        setSyncAction(null);
         if (!window.confirm(outcome.message)) {
           applySyncCounts(repoPath, outcome);
           showToast('已取消更新');
           await refresh(repoPath);
           return;
         }
+        setSyncAction('update');
         acceptProgress.current = true;
         setBusyLabel('正在合并远程更新…');
         outcome = await updateRepo(repoPath, true);
@@ -250,15 +263,17 @@ export function App() {
   }, [guardNetwork, refresh]);
 
   const handlePush = useCallback(() => {
-    void guardNetwork(async (repoPath) => {
+    void guardNetwork('push', async (repoPath) => {
       let outcome = await pushRepo(repoPath, false);
       if (outcome.status === 'needs_confirm') {
         acceptProgress.current = false;
         setBusyLabel(null);
+        setSyncAction(null);
         if (!window.confirm(outcome.message)) {
           showToast('已取消推送');
           return;
         }
+        setSyncAction('push');
         acceptProgress.current = true;
         setBusyLabel(`正在推送到 ${outcome.remote}/${outcome.branch}…`);
         outcome = await pushRepo(repoPath, true);
@@ -268,7 +283,7 @@ export function App() {
   }, [guardNetwork, refresh]);
 
   const handleFetch = useCallback(() => {
-    void guardNetwork(async (repoPath) => {
+    void guardNetwork('fetch', async (repoPath) => {
       const text = await fetchRepo(repoPath);
       showToast(text ? `已刷新远程：${text.split('\n')[0]}` : '已刷新远程');
       acceptProgress.current = false;
@@ -519,8 +534,57 @@ export function App() {
     return () => window.clearInterval(id);
   }, [native]);
 
+  const focusList = useCallback(() => {
+    const selector = activeTab === 'commit'
+      ? '[data-keyboard-root="commit"]'
+      : activeTab === 'log'
+        ? '[data-keyboard-root="log"]'
+        : '[data-keyboard-root="shelf"]';
+    document.querySelector<HTMLElement>(selector)?.focus();
+  }, [activeTab]);
+
+  const openShelve = useCallback(() => {
+    const staged = changes.filter(file => file.isStaged).map(file => file.path);
+    const count = staged.length || changes.length;
+    if (count === 0) {
+      showToast('没有可架藏的更改', true);
+      return;
+    }
+    setShelveDraft({ paths: staged, count, includesUnstaged: staged.length === 0 });
+  }, [changes]);
+
+  const confirmShelve = (name: string) => {
+    const draft = shelveDraft;
+    setShelveDraft(null);
+    if (!draft || !activeRepo) return;
+    void run('已架藏', async () => {
+      await createShelf(activeRepo.path, name, draft.paths);
+      setActiveTab('shelf');
+      return '变更已保存到本地 Shelf';
+    });
+  };
+
   useEffect(() => {
+    const typingTarget = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+    };
     const onKey = (e: KeyboardEvent) => {
+      const overlayOpen = Boolean(shelveDraft) || Boolean(diffTitle) || isAddRepoOpen || isBranchesOpen;
+      if (e.key === 'Escape') {
+        if (shelveDraft) setShelveDraft(null);
+        else if (diffTitle) setDiffTitle('');
+        else if (isAddRepoOpen) setIsAddRepoOpen(false);
+        else if (isBranchesOpen) setIsBranchesOpen(false);
+        else if (typingTarget(e.target)) (e.target as HTMLElement).blur();
+        window.dispatchEvent(new Event('easygit:dismiss'));
+        e.preventDefault();
+        focusList();
+        return;
+      }
+      if (overlayOpen) return;
       const code = e.code;
       if (e.altKey && (e.key === '9' || code === 'Digit9')) {
         e.preventDefault();
@@ -531,22 +595,22 @@ export function App() {
       } else if (e.ctrlKey && e.shiftKey && (e.key.toLowerCase() === 'k' || code === 'KeyK')) {
         e.preventDefault();
         handlePush();
-      } else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+      } else if (e.ctrlKey && !e.shiftKey && (e.key.toLowerCase() === 'k' || code === 'KeyK')) {
         e.preventDefault();
         setActiveTab('commit');
-      } else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 't') {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key.toLowerCase() === 't' || code === 'KeyT')) {
+        if (typingTarget(e.target)) return;
         e.preventDefault();
         handleUpdate();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [handlePush, handleUpdate]);
+  }, [handlePush, handleUpdate, focusList, shelveDraft, diffTitle, isAddRepoOpen, isBranchesOpen]);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
+      <WindowResizeFrame />
       <Header
         currentRepoName={activeRepo?.name || (native ? '未打开仓库' : 'easy-git')}
         currentRepoPath={activeRepo?.path || (native ? '点击添加一个本地 Git 仓库' : '')}
@@ -591,6 +655,8 @@ export function App() {
         onShelfClick={() => setActiveTab('shelf')}
         aheadCount={aheadCount}
         behindCount={behindCount}
+        syncAction={syncAction}
+        shelfCount={shelves.length}
         memoryMb={memoryMb}
       />
 
@@ -643,6 +709,9 @@ export function App() {
               onCherryPick={(hash) => void run('挑拣完成', () => cherryPick(activeRepo.path, hash))}
               onRevert={(hash) => void run('已还原该提交', () => revertCommit(activeRepo.path, hash))}
               onReset={(hash) => void run('已混合重置', () => resetTo(activeRepo.path, hash))}
+              currentBranch={currentBranch}
+              currentUser={currentUser}
+              onCompareBranch={(name) => void openRevision(`Compare ${name} with ${currentBranch}`, `${name}..HEAD`, 'range')}
               onCreateBranch={(hash) => {
                 const name = prompt('从该提交创建并检出分支：', 'feature/');
                 if (name) void run('已创建分支', () => createBranch(activeRepo.path, name, hash));
@@ -653,17 +722,18 @@ export function App() {
           {activeRepo && activeTab === 'commit' && (
             <CommitView
               changes={changes}
+              lastCommitMessage={(() => {
+                const head = commits.find(commit => commit.refs.some(ref => ref.includes('HEAD'))) ?? commits[0];
+                if (!head) return '';
+                const body = head.body?.trim();
+                return body ? `${head.subject}\n\n${body}` : head.subject;
+              })()}
               onCommit={(msg, amend, andPush) => void run(andPush ? '已提交并推送' : '已提交', () =>
                 commitChanges(activeRepo.path, msg, amend, andPush)
               )}
-              onShelve={() => {
-                const name = prompt('架藏名称：', '') || '';
-                const paths = changes.filter(c => c.isStaged).map(c => c.path);
-                void run('已架藏', async () => {
-                  await createShelf(activeRepo.path, name, paths);
-                  return '变更已保存到本地 Shelf';
-                });
-              }}
+              onAddToGitignore={(path) => void run('已加入 .gitignore', () => appendGitignore(activeRepo.path, path))}
+              onDeleteUnversioned={(file) => void run('已删除文件', () => deleteUnversioned(activeRepo.path, file.path))}
+              onShelve={openShelve}
               onToggleFileStage={handleToggleFile}
               onBatchToggleStage={handleBatch}
               onToggleAllStage={(staged) => handleBatch(changes, staged)}
@@ -707,7 +777,7 @@ export function App() {
               onCreateBranch={(name) => void run('已创建分支', () => createBranch(activeRepo.path, name))}
               onMerge={(name) => void run('合并完成', () => mergeBranch(activeRepo.path, name))}
               onRebase={(name) => void run('变基完成', () => rebaseOnto(activeRepo.path, name))}
-              onCompare={(name) => void openRevision(`Compare ${name} with ${currentBranch}`, `HEAD...${name}`, 'range')}
+              onCompare={(name) => void openRevision(`Compare ${name} with ${currentBranch}`, `${name}..HEAD`, 'range')}
               onDelete={(branch, force) => { void handleDeleteBranch(branch, force); }}
               onRename={(branch) => {
                 const name = prompt('新的分支名：', branch.name);
@@ -721,6 +791,7 @@ export function App() {
           )}
 
           {activeRepo && activeTab === 'shelf' && (
+            <div data-keyboard-root="shelf" tabIndex={-1} className="flex-1 flex flex-col min-h-0 focus:outline-none">
             <ShelfStashView
               shelves={shelves}
               stashes={stashes}
@@ -752,6 +823,7 @@ export function App() {
                 }).catch(err => showToast(String(err), true));
               }}
             />
+            </div>
           )}
 
           {activeRepo && activeTab === 'merge' && (
@@ -813,7 +885,7 @@ export function App() {
         onRebase={(name) => void run('变基完成', () => rebaseOnto(activeRepo.path, name))}
         onCompare={(name) => {
           setIsBranchesOpen(false);
-          void openRevision(`Compare ${name} with ${currentBranch}`, `HEAD...${name}`, 'range');
+          void openRevision(`Compare ${name} with ${currentBranch}`, `${name}..HEAD`, 'range');
         }}
         onDelete={(branch, force) => { void handleDeleteBranch(branch, force); }}
         onRename={(branch) => {
@@ -831,6 +903,16 @@ export function App() {
         onClose={() => setIsAddRepoOpen(false)}
         onAdd={(name, path) => { void handleAddRepo(name, path); }}
         onBrowse={pickDirectory}
+      />
+
+      <ShelveDialog
+        open={shelveDraft !== null}
+        fileCount={shelveDraft?.count ?? 0}
+        hint={shelveDraft?.includesUnstaged
+          ? `没有已暂存文件，将架藏全部 ${shelveDraft.count} 个更改，并移出工作区。`
+          : `将把已暂存的 ${shelveDraft?.count ?? 0} 个文件移入架藏，工作区对应改动会被移走。`}
+        onCancel={() => setShelveDraft(null)}
+        onConfirm={confirmShelve}
       />
 
       {diffTitle && (

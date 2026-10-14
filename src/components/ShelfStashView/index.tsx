@@ -51,6 +51,8 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
   const selectedShelf = shelves.find(s => s.id === selectedShelfId);
 
   const handleDeleteShelf = (id: string) => {
+    const shelf = shelves.find(item => item.id === id);
+    if (!confirm(`清理架藏「${shelf?.name || id}」？只删除本地架藏清单，不会自动恢复到工作区。`)) return;
     if (onDeleteShelf) onDeleteShelf(id);
     else setShelves(prev => prev.filter(s => s.id !== id));
   };
@@ -61,7 +63,7 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-jb-bg select-none text-xs">
+    <div data-keyboard-root="shelf" tabIndex={-1} className="flex-1 flex flex-col h-full bg-jb-bg select-none text-xs focus:outline-none">
       {/* 顶部二级导航 */}
       <div className="h-9 px-3 border-b border-jb-border bg-jb-panel flex items-center justify-between">
         <div className="flex items-center space-x-1">
@@ -177,10 +179,11 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
 
                     <button
                       onClick={() => handleDeleteShelf(selectedShelf.id)}
-                      className="p-1.5 hover:bg-jb-hover text-rose-400 hover:text-rose-300 rounded border border-jb-border transition-colors"
-                      title="删除架藏"
+                      className="px-2 py-1.5 hover:bg-jb-hover text-rose-400 hover:text-rose-300 rounded border border-jb-border transition-colors flex items-center"
+                      title="清理架藏"
                     >
                       <Trash2 className="w-4 h-4" />
+                      <span className="ml-1">清理</span>
                     </button>
                   </div>
                 </div>

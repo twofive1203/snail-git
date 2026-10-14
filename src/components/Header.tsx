@@ -7,6 +7,7 @@ import {
   GitGraph, 
   RotateCcw, 
   RefreshCw, 
+  Loader2,
   FolderGit2, 
   Layers, 
   Cpu, 
@@ -23,6 +24,9 @@ import {
   Check
 } from 'lucide-react';
 import { GitRepository } from '../types/git';
+import { WindowControls } from './WindowControls';
+
+export type SyncAction = 'update' | 'push' | 'fetch';
 
 export type MainViewMode = 'log' | 'commit';
 
@@ -50,6 +54,8 @@ interface HeaderProps {
   hasConflict?: boolean;
   aheadCount?: number;
   behindCount?: number;
+  syncAction?: SyncAction | null;
+  shelfCount?: number;
   memoryMb?: number;
   busyLabel?: string | null;
   operationsLocked?: boolean;
@@ -79,6 +85,8 @@ export const Header: React.FC<HeaderProps> = ({
   hasConflict = false,
   aheadCount = 0,
   behindCount = 0,
+  syncAction = null,
+  shelfCount = 0,
   memoryMb,
   busyLabel,
   operationsLocked = false,
@@ -100,7 +108,15 @@ export const Header: React.FC<HeaderProps> = ({
       }
     };
     window.addEventListener('mousedown', handleClickOutside);
-    return () => window.removeEventListener('mousedown', handleClickOutside);
+    const dismiss = () => {
+      setIsRepoMenuOpen(false);
+      setIsMoreMenuOpen(false);
+    };
+    window.addEventListener('easygit:dismiss', dismiss);
+    return () => {
+      window.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('easygit:dismiss', dismiss);
+    };
   }, []);
 
   const lockClass = operationsLocked ? 'opacity-50 cursor-not-allowed pointer-events-none' : '';
@@ -122,7 +138,10 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="h-11 bg-[#1E1F22] border-b border-[#303236] flex items-center justify-between px-3 select-none text-xs z-30 relative shadow-sm">
+    <header
+      data-tauri-drag-region="deep"
+      className="h-11 bg-[#1E1F22] border-b border-[#303236] flex items-center justify-between pl-3 pr-0 select-none text-xs z-30 relative shadow-sm"
+    >
       {/* ─── 左区：Logo + 仓库下拉切换器 + 分支快速胶囊 ─── */}
       <div className="flex items-center space-x-2.5 min-w-0">
         {/* Logo */}
@@ -153,7 +172,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* 仓库全功能下拉面板 */}
           {isRepoMenuOpen && (
-            <div className="absolute left-0 top-full mt-1.5 w-80 bg-[#1E1F22] border border-[#393B40] rounded-lg shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-100 overflow-hidden flex flex-col">
+            <div data-tauri-drag-region="false" className="absolute left-0 top-full mt-1.5 w-80 bg-[#1E1F22] border border-[#393B40] rounded-lg shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-100 overflow-hidden flex flex-col">
               {/* 搜索框 */}
               <div className="p-2 border-b border-[#303236] bg-[#2B2D30]/50">
                 <div className="relative">
@@ -352,7 +371,8 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* ─── 右区：常用 Git 动作组、状态 ─── */}
-      <div className="flex items-center space-x-2">
+      <div className="flex items-center shrink-0 h-11">
+      <div className="flex items-center space-x-2 pr-1">
         {/* 常用 Git 操作组 */}
         <div className="flex items-center space-x-0.5 bg-[#2B2D30]/60 p-0.5 rounded border border-[#393B40]">
           {/* Update */}
@@ -362,8 +382,17 @@ export const Header: React.FC<HeaderProps> = ({
             title="Update Project (Ctrl+T) - 拉取远程并合并/变基"
             className={`flex items-center space-x-1 px-2.5 py-1 rounded hover:bg-[#35373C] text-[#DFE1E5] transition-colors ${lockClass}`}
           >
-            <ArrowDownToLine className="w-3.5 h-3.5 text-[#3574F0]" />
+            {syncAction === 'update' ? (
+              <Loader2 className="w-3.5 h-3.5 text-[#3574F0] animate-spin" />
+            ) : (
+              <ArrowDownToLine className="w-3.5 h-3.5 text-[#3574F0]" />
+            )}
             <span className="hidden xl:inline text-[11px] font-medium">Update</span>
+            {behindCount > 0 && (
+              <span className="px-1 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono text-[10px] leading-4">
+                ↓{behindCount}
+              </span>
+            )}
           </button>
 
           {/* Push */}
@@ -373,8 +402,17 @@ export const Header: React.FC<HeaderProps> = ({
             title="Push (Ctrl+Shift+K) - 推送本地提交到远程"
             className={`flex items-center space-x-1 px-2.5 py-1 rounded hover:bg-[#35373C] text-[#DFE1E5] transition-colors ${lockClass}`}
           >
-            <ArrowUpFromLine className="w-3.5 h-3.5 text-indigo-400" />
+            {syncAction === 'push' ? (
+              <Loader2 className="w-3.5 h-3.5 text-indigo-300 animate-spin" />
+            ) : (
+              <ArrowUpFromLine className="w-3.5 h-3.5 text-indigo-400" />
+            )}
             <span className="hidden xl:inline text-[11px] font-medium">Push</span>
+            {aheadCount > 0 && (
+              <span className="px-1 rounded bg-blue-500/20 text-blue-300 border border-blue-500/40 font-mono text-[10px] leading-4">
+                ↑{aheadCount}
+              </span>
+            )}
           </button>
 
           {/* Fetch */}
@@ -384,7 +422,7 @@ export const Header: React.FC<HeaderProps> = ({
             title="Fetch - 刷新所有远程分支状态"
             className={`p-1.5 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5] transition-colors ${lockClass}`}
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${syncAction === 'fetch' ? 'animate-spin text-[#3574F0]' : ''}`} />
           </button>
 
           {/* 更多动作下拉菜单 */}
@@ -398,7 +436,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {isMoreMenuOpen && (
-              <div className="absolute right-0 top-full mt-1.5 w-48 bg-[#2B2D30] border border-[#393B40] rounded-md shadow-2xl py-1 z-50 text-xs">
+              <div data-tauri-drag-region="false" className="absolute right-0 top-full mt-1.5 w-56 bg-[#2B2D30] border border-[#393B40] rounded-md shadow-2xl py-1 z-50 text-xs">
                 <button
                   onClick={() => {
                     onShelfClick();
@@ -407,7 +445,12 @@ export const Header: React.FC<HeaderProps> = ({
                   className="w-full px-3 py-1.5 text-left text-[#DFE1E5] hover:bg-[#35373C] flex items-center space-x-2 transition-colors"
                 >
                   <Layers className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Shelf & Stash (架藏栈)</span>
+                  <span className="flex-1 text-left">Shelf & Stash (架藏栈)</span>
+                  {shelfCount > 0 && (
+                    <span className="px-1.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono text-[10px]">
+                      {shelfCount}
+                    </span>
+                  )}
                 </button>
 
                 <button
@@ -439,7 +482,6 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* 正在连接提示 */}
         {busyLabel && (
           <span
             className="max-w-[140px] truncate px-1 text-[10px] text-amber-300 font-mono animate-pulse"
@@ -449,9 +491,8 @@ export const Header: React.FC<HeaderProps> = ({
           </span>
         )}
 
-        {/* 内存微标 */}
         {memoryMb !== undefined && memoryMb > 0 && (
-          <div 
+          <div
             className="hidden 2xl:flex items-center space-x-1 px-1.5 py-0.5 rounded bg-[#2B2D30] border border-[#393B40] text-[10px] text-emerald-400 font-mono"
             title="EasyGit 内存占用"
           >
@@ -459,6 +500,8 @@ export const Header: React.FC<HeaderProps> = ({
             <span>{memoryMb}MB</span>
           </div>
         )}
+      </div>
+      <WindowControls />
       </div>
     </header>
   );

@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { FileChange, FileChangeStatus } from '../../types/git';
+import { FilePathDisplay } from '../common/FilePathDisplay';
 import { 
   ChevronDown, 
   ChevronRight, 
@@ -26,6 +27,8 @@ interface ChangelistTreeProps {
   onShelveSelected: () => void;
   onRollbackSelected: () => void;
   onRefresh?: () => void;
+  onAddToGitignore?: (path: string) => void;
+  onDeleteUnversioned?: (file: FileChange) => void;
   repoKey?: string;
 }
 
@@ -51,8 +54,18 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   onShelveSelected,
   onRollbackSelected,
   onRefresh,
+  onAddToGitignore,
+  onDeleteUnversioned,
   repoKey = 'default',
 }) => {
+  const treeRef = useRef<HTMLDivElement>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    path: string;
+    isFolder: boolean;
+    file?: FileChange;
+  } | null>(null);
   const storageKey = `easygit.changelists.${repoKey}`;
   const [changelistNames, setChangelistNames] = useState<string[]>(['更改']);
   const [assignments, setAssignments] = useState<Record<string, string>>({});
@@ -155,7 +168,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
       if (compactMiddleFolders && node.isFolder) {
         while (rawChildren.length === 1 && rawChildren[0].isFolder) {
           const onlyChild = rawChildren[0];
-          displayName = `${displayName}\\${onlyChild.name}`;
+          displayName = `${displayName}/${onlyChild.name}`;
           currentFull = onlyChild.fullPath;
           currentTag = currentTag || onlyChild.submoduleTag;
           rawChildren = onlyChild.children;
@@ -187,6 +200,21 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
 
   const trackedTree = useMemo(() => buildTree(trackedFiles, 'tracked'), [trackedFiles, compactMiddleFolders]);
   const untrackedTree = useMemo(() => buildTree(untrackedFiles, 'untracked'), [untrackedFiles, compactMiddleFolders]);
+
+  const findNode = (nodes: TreeNode[], key: string): TreeNode | null => {
+    for (const node of nodes) {
+      if (node.key === key) return node;
+      const found = findNode(node.children, key);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  useEffect(() => {
+    const dismiss = () => setContextMenu(null);
+    window.addEventListener('easygit:dismiss', dismiss);
+    return () => window.removeEventListener('easygit:dismiss', dismiss);
+  }, []);
 
   // 切换折叠/展开
   const toggleExpand = (key: string) => {
@@ -279,6 +307,34 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   };
 
   // 文件图标匹配（完全复刻 IDEA 风格）
+  const fileStatusClass = (status?: FileChangeStatus) => {
+    switch (status) {
+      case 'modified':
+        return 'text-[#589DF6]';
+      case 'added':
+      case 'untracked':
+        return 'text-[#59A869]';
+      case 'conflict':
+        return 'text-[#E35967]';
+      case 'deleted':
+        return 'text-[#E35967] line-through';
+      default:
+        return 'text-[#DFE1E5]';
+    }
+  };
+
+  const openUntrackedMenu = (event: React.MouseEvent, path: string, isFolder: boolean, file?: FileChange) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      x: Math.min(event.clientX, window.innerWidth - 220),
+      y: Math.min(event.clientY, window.innerHeight - 96),
+      path: path.replace(/\\/g, '/'),
+      isFolder,
+      file,
+    });
+  };
+
   const renderFileIcon = (filename: string) => {
     if (filename.endsWith('.json')) {
       return (
@@ -309,8 +365,11 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     const isExpanded = expandedKeys.has(node.key);
     const checkState = getNodeCheckState(node);
     const isSelected = selectedKey === node.key;
+    const nodeFiles = node.isFolder ? getAllFilesInNode(node) : node.file ? [node.file] : [];
+    const allUntracked = nodeFiles.length > 0 && nodeFiles.every(file => file.status === 'untracked');
 
     const handleRowClick = () => {
+      treeRef.current?.focus();
       setSelectedKey(node.key);
       if (node.isFolder) {
         toggleExpand(node.key);
@@ -329,6 +388,10 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
         {/* 节点行 */}
         <div
           onClick={handleRowClick}
+          onContextMenu={(event) => {
+            if (!allUntracked) return;
+            openUntrackedMenu(event, node.isFolder ? node.fullPath : (node.file?.path || node.fullPath), node.isFolder, node.file);
+          }}
           className={`flex items-center h-6 px-1 cursor-pointer transition-colors text-xs group relative ${
             isSelected
               ? 'bg-[#2E436E] text-white font-medium'
@@ -378,10 +441,12 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
           </div>
 
           {/* 节点名称 */}
-          <span className={`truncate font-mono mr-1.5 ${
-            !node.isFolder ? 'text-[#589DF6]' : ''
-          }`}>
-            {node.name}
+          <span className="mr-1.5 flex-1 min-w-0">
+            {node.isFolder ? (
+              <FilePathDisplay path={node.name} />
+            ) : (
+              <FilePathDisplay path={node.name} filenameClassName={fileStatusClass(node.file?.status)} />
+            )}
           </span>
 
           {/* 文件总数指示 (e.g. 13 个文件) */}
@@ -410,7 +475,31 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   };
 
   return (
-    <div className="w-96 border-r border-[#393B40] bg-[#1E1F22] flex flex-col h-full select-none text-xs">
+    <div
+      ref={treeRef}
+      data-keyboard-root="commit"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key !== ' ' && event.code !== 'Space') return;
+        const target = event.target as HTMLElement;
+        if (target.closest('button, input, textarea, select')) return;
+        event.preventDefault();
+        if (viewMode === 'flat') {
+          const file = changes.find(item => item.id === selectedFileId);
+          if (file) onToggleFileStage(file.id);
+          return;
+        }
+        const node = findNode(trackedTree, selectedKey) || findNode(untrackedTree, selectedKey);
+        if (node) {
+          handleToggleNodeStage(node);
+          return;
+        }
+        const file = visibleChanges.find(item => item.id === selectedFileId);
+        if (file) onToggleFileStage(file.id);
+      }}
+      className="w-96 border-r border-[#393B40] bg-[#1E1F22] flex flex-col h-full select-none text-xs focus:outline-none"
+      onClick={() => setContextMenu(null)}
+    >
       {/* 顶部工具栏 (1:1 还原截图顶栏) */}
       <div className="h-9 px-2 border-b border-[#393B40] flex items-center justify-between bg-[#2B2D30] text-[#9DA0A8]">
         {/* 左侧操作按钮 */}
@@ -609,12 +698,19 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
               return (
                 <div
                   key={file.id}
-                  onClick={() => onSelectFile(file)}
+                  onClick={() => {
+                    treeRef.current?.focus();
+                    onSelectFile(file);
+                  }}
+                  onContextMenu={(event) => {
+                    if (file.status !== 'untracked') return;
+                    openUntrackedMenu(event, file.path, false, file);
+                  }}
                   className={`flex items-center justify-between px-2 py-1 rounded cursor-pointer text-xs ${
                     isSelected ? 'bg-[#2E436E] text-white' : 'hover:bg-[#2B2D30] text-[#DFE1E5]'
                   }`}
                 >
-                  <div className="flex items-center space-x-2 min-w-0">
+                  <div className="flex items-center space-x-2 min-w-0 flex-1">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -625,7 +721,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                       {renderCheckbox(file.isStaged ? 'checked' : 'unchecked')}
                     </button>
                     {renderFileIcon(file.filename)}
-                    <span className="font-mono truncate">{file.path}</span>
+                    <FilePathDisplay path={file.path} className="flex-1" filenameClassName={fileStatusClass(file.status)} />
                   </div>
                 </div>
               );
@@ -650,6 +746,39 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
           {viewMode === 'tree' ? '树状视图' : '扁平视图'}
         </div>
       </div>
+
+      {contextMenu && (
+        <div
+          className="fixed z-50 w-52 bg-[#2B2D30] border border-[#393B40] rounded shadow-2xl py-1 text-xs text-[#DFE1E5]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            onClick={() => {
+              onAddToGitignore?.(contextMenu.path);
+              setContextMenu(null);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-[#2E436E]"
+          >
+            添加到 .gitignore
+          </button>
+          {!contextMenu.isFolder && contextMenu.file && (
+            <button
+              onClick={() => {
+                const file = contextMenu.file;
+                setContextMenu(null);
+                if (!file) return;
+                if (confirm(`永久删除未版本管理文件「${file.path}」？此操作不可恢复。`)) {
+                  onDeleteUnversioned?.(file);
+                }
+              }}
+              className="w-full text-left px-3 py-1.5 hover:bg-[#2E436E] text-[#E35967]"
+            >
+              删除文件
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

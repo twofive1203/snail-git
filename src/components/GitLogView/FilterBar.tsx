@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Filter, GitBranch, User, Calendar, FolderTree, RotateCcw, X } from 'lucide-react';
+import { Search, GitBranch, User, Calendar, FolderTree, RotateCcw, X, Star } from 'lucide-react';
 
 interface FilterBarProps {
   searchQuery: string;
@@ -14,6 +14,7 @@ interface FilterBarProps {
   onPathChange: (p: string) => void;
   branches: string[];
   authors: string[];
+  currentUser?: string;
 }
 
 export const FilterBar: React.FC<FilterBarProps> = ({
@@ -29,7 +30,11 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   onPathChange,
   branches,
   authors,
+  currentUser = '',
 }) => {
+  const meActive = Boolean(currentUser) && selectedAuthor === currentUser;
+  const headActive = selectedBranch === 'Head';
+  const authorOptions = currentUser && !authors.includes(currentUser) ? [currentUser, ...authors] : authors;
   const isFiltered = selectedBranch !== 'All' || selectedAuthor !== 'All' || selectedDate !== 'All' || pathQuery.trim() !== '' || searchQuery.trim() !== '';
 
   const handleResetFilters = () => {
@@ -44,6 +49,35 @@ export const FilterBar: React.FC<FilterBarProps> = ({
     <div className="h-8 bg-[#1E1F22] border-b border-[#303236] flex items-center justify-between px-2.5 text-xs gap-2 select-none shrink-0">
       {/* 左侧各维度筛选胶囊 */}
       <div className="flex items-center space-x-1.5 flex-1 overflow-x-auto no-scrollbar">
+        <button
+          type="button"
+          disabled={!currentUser}
+          onClick={() => onAuthorChange(meActive ? 'All' : currentUser)}
+          title={currentUser ? `仅看我的：${currentUser}` : '未读取到 git config user.name'}
+          className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 transition-colors ${
+            meActive
+              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+              : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157] disabled:opacity-40 disabled:cursor-not-allowed'
+          }`}
+        >
+          <Star className={`w-3 h-3 shrink-0 ${meActive ? 'fill-amber-400 text-amber-400' : 'text-amber-400'}`} />
+          <span>仅看我的</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onBranchChange(headActive ? 'All' : 'Head')}
+          title="当前分支：只看 HEAD 所在提交"
+          className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 transition-colors ${
+            headActive
+              ? 'bg-[#3574F0]/20 border-[#3574F0] text-blue-300'
+              : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
+          }`}
+        >
+          <GitBranch className="w-3 h-3 text-[#3574F0] shrink-0" />
+          <span>当前分支</span>
+        </button>
+
         {/* 分支筛选胶囊 */}
         <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
           selectedBranch !== 'All' 
@@ -79,7 +113,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
             <option value="All" className="bg-[#2B2D30]">All Users</option>
-            {authors.map(a => (
+            {authorOptions.map(a => (
               <option key={a} value={a} className="bg-[#2B2D30]">{a}</option>
             ))}
           </select>

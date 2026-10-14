@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { Check, ChevronDown, Sparkles, History, Layers } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Check, ChevronDown, Layers } from 'lucide-react';
 
 interface CommitActionBoxProps {
   stagedFilesCount: number;
+  lastCommitMessage?: string;
   onCommit: (message: string, isAmend: boolean) => void;
   onCommitAndPush: (message: string, isAmend: boolean) => void;
   onShelve: () => void;
@@ -11,6 +12,7 @@ interface CommitActionBoxProps {
 
 export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
   stagedFilesCount,
+  lastCommitMessage = '',
   onCommit,
   onCommitAndPush,
   onShelve,
@@ -19,6 +21,15 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
   const [message, setMessage] = useState('');
   const [isAmend, setIsAmend] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const draftRef = useRef('');
+  const amendFilled = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!isAmend || amendFilled.current || !lastCommitMessage) return;
+    setMessage(lastCommitMessage);
+    amendFilled.current = true;
+  }, [isAmend, lastCommitMessage]);
 
   const prefixes = [
     { label: 'feat:', desc: '新特性' },
@@ -29,15 +40,44 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
     { label: 'docs:', desc: '文档' },
   ];
 
-  const handleAddPrefix = (prefix: string) => {
-    if (!message.startsWith(prefix)) {
-      setMessage(`${prefix} ${message.replace(/^[a-z]+(\([a-z0-9_-]+\))?:\s*/i, '')}`);
-    }
+  const focusMessageEnd = (value: string) => {
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(value.length, value.length);
+    });
   };
+
+  const handleAddPrefix = (prefix: string) => {
+    const next = message.startsWith(prefix)
+      ? message
+      : `${prefix} ${message.replace(/^[a-z]+(\([a-z0-9_-]+\))?:\s*/i, '')}`;
+    setMessage(next);
+    focusMessageEnd(next);
+  };
+
+  const handleAmendChange = (checked: boolean) => {
+    if (checked) {
+      draftRef.current = message;
+      amendFilled.current = Boolean(lastCommitMessage);
+      if (lastCommitMessage) setMessage(lastCommitMessage);
+    } else {
+      amendFilled.current = false;
+      setMessage(draftRef.current);
+    }
+    setIsAmend(checked);
+  };
+
+  const subjectLength = message.split('\n')[0]?.length ?? 0;
+  const counterClass = subjectLength > 72
+    ? 'text-rose-400'
+    : subjectLength > 50
+      ? 'text-amber-400'
+      : 'text-jb-text-muted';
 
   return (
     <div className="h-44 border-t border-jb-border bg-jb-panel p-3 flex flex-col justify-between text-xs select-none">
-      {/* 顶部操作：快捷前缀与 Amend 选项 */}
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center space-x-1.5">
           <span className="text-jb-text-muted text-[11px] font-medium">Prefixes:</span>
@@ -56,16 +96,16 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
           <input
             type="checkbox"
             checked={isAmend}
-            onChange={(e) => setIsAmend(e.target.checked)}
+            onChange={(e) => handleAmendChange(e.target.checked)}
             className="rounded border-jb-border text-jb-blue focus:ring-0 cursor-pointer bg-jb-bg"
           />
           <span className="text-[11px] font-medium" title="只改写尚未推送的最近一次提交">Amend Commit</span>
         </label>
       </div>
 
-      {/* 提交消息文本框 */}
       <div className="flex-1 relative mb-2">
         <textarea
+          ref={textareaRef}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Commit message (Ctrl+Enter to commit)..."
@@ -74,13 +114,19 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
               e.preventDefault();
               onCommit(message, isAmend);
               setMessage('');
+              draftRef.current = '';
             }
           }}
-          className="w-full h-full bg-jb-bg border border-jb-border rounded p-2 text-xs text-jb-text-primary placeholder-jb-text-muted font-sans resize-none focus:outline-none focus:border-jb-blue transition-colors leading-relaxed"
+          className="w-full h-full bg-jb-bg border border-jb-border rounded p-2 pb-5 text-xs text-jb-text-primary placeholder-jb-text-muted font-sans resize-none focus:outline-none focus:border-jb-blue transition-colors leading-relaxed"
         />
+        <span
+          title="Git 50/72：首行超过 50 字符建议缩短，超过 72 字符可能被截断"
+          className={`absolute right-2 bottom-1 text-[10px] font-mono pointer-events-none ${counterClass}`}
+        >
+          {subjectLength} / 72
+        </span>
       </div>
 
-      {/* 底部动作条 */}
       <div className="flex items-center justify-between pt-1">
         <div className="flex items-center space-x-2 text-jb-text-muted text-[11px]">
           <span>{stagedFilesCount} file(s) staged</span>
@@ -94,7 +140,6 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
           </button>
         </div>
 
-        {/* 组合提交按钮 (仿 IDEA Commit / Commit and Push 复合按钮) */}
         <div className="flex items-center space-x-2 relative">
           <div className="inline-flex rounded-md shadow-sm">
             <button
@@ -115,7 +160,6 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
             </button>
           </div>
 
-          {/* 下拉弹出项 */}
           {showDropdown && (
             <div className="absolute right-0 bottom-full mb-1 w-44 bg-jb-panel border border-jb-border rounded shadow-xl py-1 z-30 text-xs">
               <button

@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { GitCommit } from '../../types/git';
 import { 
-  GitCommit as CommitIcon, 
   GitBranch, 
   Tag, 
   Copy, 
@@ -13,9 +12,61 @@ import {
   FileDiff 
 } from 'lucide-react';
 
+type RefKind = 'head' | 'tag' | 'remote' | 'local';
+
+interface ParsedRef {
+  kind: RefKind;
+  label: string;
+  title: string;
+}
+
+function parseRef(ref: string): ParsedRef {
+  if (ref.startsWith('HEAD -> ')) {
+    return { kind: 'head', label: ref.slice('HEAD -> '.length), title: ref };
+  }
+  if (ref === 'HEAD') {
+    return { kind: 'head', label: 'HEAD', title: ref };
+  }
+  if (ref.startsWith('tag: ')) {
+    return { kind: 'tag', label: ref.slice('tag: '.length), title: ref };
+  }
+  if (ref.includes('origin/') || ref.startsWith('remotes/')) {
+    return { kind: 'remote', label: ref.replace(/^remotes\//, ''), title: ref };
+  }
+  return { kind: 'local', label: ref, title: ref };
+}
+
+function RefBadge({ item, onContextMenu }: { item: ParsedRef; onContextMenu?: (event: React.MouseEvent) => void }) {
+  const badgeClass = item.kind === 'head'
+    ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/40 font-semibold'
+    : item.kind === 'tag'
+      ? 'bg-amber-500/25 text-amber-300 border-amber-500/40'
+      : item.kind === 'remote'
+        ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+        : 'bg-blue-500/20 text-blue-300 border-blue-500/40';
+
+  return (
+    <span
+      title={item.title}
+      onContextMenu={onContextMenu}
+      className={`text-[10px] px-1.5 py-0.5 rounded border shrink-0 max-w-[200px] overflow-hidden inline-flex items-center gap-1 font-mono ${badgeClass}`}
+    >
+      {item.kind === 'head' ? (
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+      ) : item.kind === 'tag' ? (
+        <Tag className="w-2.5 h-2.5 shrink-0" />
+      ) : (
+        <GitBranch className="w-2.5 h-2.5 shrink-0" />
+      )}
+      <span className="truncate">{item.label}</span>
+    </span>
+  );
+}
+
 interface CommitGraphProps {
   commits: GitCommit[];
   selectedHash: string;
+  focusToken?: number;
   onSelectCommit: (commit: GitCommit) => void;
   onViewDiff: (commit: GitCommit) => void;
   onCheckout?: (hash: string) => void;
@@ -23,6 +74,18 @@ interface CommitGraphProps {
   onRevert?: (hash: string) => void;
   onReset?: (hash: string) => void;
   onCreateBranch?: (hash: string) => void;
+  onCompareBranch?: (name: string) => void;
+  currentBranch?: string;
+}
+
+function compareTargets(commit: GitCommit, currentBranch: string): string[] {
+  const names = new Set<string>();
+  commit.refs.forEach(ref => {
+    const parsed = parseRef(ref);
+    if (parsed.kind === 'tag' || !parsed.label || parsed.label === 'HEAD' || parsed.label === currentBranch) return;
+    names.add(parsed.label);
+  });
+  return Array.from(names);
 }
 
 // 模拟 IDEA 经典的 6 色分支轨道配色
@@ -38,6 +101,7 @@ const TRACK_COLORS = [
 export const CommitGraph: React.FC<CommitGraphProps> = ({
   commits,
   selectedHash,
+  focusToken = 0,
   onSelectCommit,
   onViewDiff,
   onCheckout,
@@ -45,18 +109,34 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   onRevert,
   onReset,
   onCreateBranch,
+  onCompareBranch,
+  currentBranch = '',
 }) => {
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
     y: number;
     commit: GitCommit | null;
+    branchName?: string;
   }>({ visible: false, x: 0, y: 0, commit: null });
 
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
+  const [expandedRefs, setExpandedRefs] = useState<Set<string>>(new Set());
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
 
   const rowHeight = 28;
   const colWidth = 14;
+
+  useEffect(() => {
+    if (!focusToken) return;
+    rowRefs.current.get(selectedHash)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [focusToken, selectedHash]);
+
+  useEffect(() => {
+    const dismiss = () => setContextMenu(prev => ({ ...prev, visible: false }));
+    window.addEventListener('easygit:dismiss', dismiss);
+    return () => window.removeEventListener('easygit:dismiss', dismiss);
+  }, []);
 
   const handleContextMenu = (e: React.MouseEvent, commit: GitCommit) => {
     e.preventDefault();
@@ -76,17 +156,17 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
 
   return (
     <div 
-      className="flex-1 overflow-auto bg-jb-bg select-none relative focus:outline-none"
+      className="flex-1 overflow-auto overflow-x-auto bg-jb-bg select-none relative focus:outline-none"
       onClick={() => setContextMenu(prev => ({ ...prev, visible: false }))}
     >
-      <table className="w-full border-collapse text-xs font-sans">
+      <table className="w-full table-fixed border-collapse text-xs font-sans min-w-[760px]">
         <thead className="sticky top-0 bg-jb-panel/95 border-b border-jb-border z-10 text-jb-text-muted font-medium select-none shadow-sm">
           <tr>
-            <th className="py-1.5 px-3 text-left font-normal w-24">Graph</th>
+            <th className="py-1.5 px-3 text-left font-normal w-20">Graph</th>
             <th className="py-1.5 px-2 text-left font-normal">Description</th>
             <th className="py-1.5 px-2 text-left font-normal w-32">Author</th>
             <th className="py-1.5 px-2 text-left font-normal w-28">Date</th>
-            <th className="py-1.5 px-3 text-right font-normal w-24">Commit</th>
+            <th className="py-1.5 pr-4 text-right font-normal w-24">Commit</th>
           </tr>
         </thead>
         <tbody>
@@ -100,6 +180,10 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             return (
               <tr
                 key={commit.hash}
+                ref={(node) => {
+                  if (node) rowRefs.current.set(commit.hash, node);
+                  else rowRefs.current.delete(commit.hash);
+                }}
                 onClick={() => onSelectCommit(commit)}
                 onContextMenu={(e) => handleContextMenu(e, commit)}
                 className={`h-7 border-b border-jb-border/30 cursor-pointer transition-colors ${
@@ -109,7 +193,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                 }`}
               >
                 {/* 拓扑分支图轨道单元格 */}
-                <td className="p-0 relative w-24 overflow-hidden">
+                <td className="p-0 relative w-20 overflow-hidden">
                   <svg 
                     className="w-full h-7 block" 
                     height={rowHeight}
@@ -171,46 +255,67 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                 </td>
 
                 {/* 描述与 Branch / Tag 徽章 */}
-                <td className="py-1 px-2 overflow-hidden text-ellipsis whitespace-nowrap">
-                  <div className="flex items-center space-x-1.5 overflow-hidden">
-                    {/* 分支徽章展示 (仿 IDEA 黄底 Tag, 绿底 HEAD, 蓝底 Remote) */}
-                    {commit.refs.map((ref, rIdx) => {
-                      const isHead = ref.includes('HEAD');
-                      const isTag = ref.includes('tag:');
-                      const isRemote = ref.includes('origin/');
-
-                      let badgeClass = 'bg-blue-500/20 text-blue-300 border-blue-500/40';
-                      if (isHead) badgeClass = 'bg-emerald-500/25 text-emerald-300 border-emerald-500/40 font-semibold';
-                      else if (isTag) badgeClass = 'bg-amber-500/25 text-amber-300 border-amber-500/40';
-                      else if (isRemote) badgeClass = 'bg-purple-500/20 text-purple-300 border-purple-500/40';
-
+                <td className="py-1 px-2 overflow-hidden">
+                  <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+                    {(() => {
+                      const parsed = commit.refs.map(parseRef);
+                      const primary = parsed.filter(item => item.kind === 'head' || item.kind === 'local');
+                      const secondary = parsed.filter(item => item.kind === 'tag' || item.kind === 'remote');
+                      const expanded = expandedRefs.has(commit.hash);
+                      const visibleSecondary = expanded ? secondary : secondary.slice(0, 2);
+                      const hiddenCount = secondary.length - visibleSecondary.length;
                       return (
-                        <span 
-                          key={rIdx} 
-                          className={`text-[10px] px-1.5 py-0.2 rounded border shrink-0 flex items-center space-x-1 font-mono ${badgeClass}`}
-                        >
-                          {isTag ? <Tag className="w-2.5 h-2.5" /> : <GitBranch className="w-2.5 h-2.5" />}
-                          <span>{ref}</span>
-                        </span>
+                        <>
+                          {[...primary, ...visibleSecondary].map(item => (
+                            <RefBadge
+                              key={item.title}
+                              item={item}
+                              onContextMenu={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setContextMenu({
+                                  visible: true,
+                                  x: Math.min(event.clientX, window.innerWidth - 240),
+                                  y: Math.min(event.clientY, window.innerHeight - 280),
+                                  commit,
+                                  branchName: item.kind === 'tag' || item.label === 'HEAD' ? undefined : item.label,
+                                });
+                              }}
+                            />
+                          ))}
+                          {secondary.length > 2 && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedRefs(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(commit.hash)) next.delete(commit.hash);
+                                  else next.add(commit.hash);
+                                  return next;
+                                });
+                              }}
+                              title={expanded ? '收起引用' : `还有 ${hiddenCount} 个引用`}
+                              className="text-[10px] px-1.5 py-0.5 rounded-full border border-jb-border bg-jb-panel text-jb-text-muted hover:text-jb-text-primary shrink-0"
+                            >
+                              {expanded ? '–' : `+${hiddenCount}`}
+                            </button>
+                          )}
+                        </>
                       );
-                    })}
-
-                    <span className="truncate">{commit.subject}</span>
+                    })()}
+                    <span className="truncate min-w-0">{commit.subject}</span>
                   </div>
                 </td>
 
-                {/* 提交者 */}
-                <td className="py-1 px-2 whitespace-nowrap text-jb-text-secondary">
-                  <span className="truncate">{commit.author}</span>
+                <td className="py-1 px-2 overflow-hidden text-jb-text-secondary">
+                  <span className="block truncate">{commit.author}</span>
                 </td>
 
-                {/* 时间 */}
-                <td className="py-1 px-2 whitespace-nowrap text-jb-text-muted">
-                  <span>{commit.relativeDate}</span>
+                <td className="py-1 px-2 overflow-hidden text-jb-text-muted">
+                  <span className="block truncate">{commit.relativeDate}</span>
                 </td>
 
-                {/* Hash */}
-                <td className="py-1 px-3 text-right whitespace-nowrap font-mono text-jb-text-muted">
+                <td className="py-1 pr-4 text-right font-mono text-jb-text-muted">
                   <button 
                     onClick={(e) => {
                       e.stopPropagation();
@@ -220,9 +325,8 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                     className="hover:text-jb-blue transition-colors px-1 py-0.5 rounded hover:bg-jb-panel"
                   >
                     {copiedHash === commit.hash ? (
-                      <span className="text-jb-green flex items-center space-x-0.5 justify-end">
+                      <span className="text-jb-green inline-flex items-center justify-end">
                         <Check className="w-3 h-3" />
-                        <span>Copied</span>
                       </span>
                     ) : (
                       commit.shortHash
@@ -259,6 +363,26 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             <FileDiff className="w-3.5 h-3.5 text-jb-blue" />
             <span>Show Diff with Local</span>
           </button>
+
+          {contextMenu.branchName === currentBranch && (
+            <div className="px-3 py-1.5 text-jb-text-muted">已是当前分支</div>
+          )}
+          {(contextMenu.branchName && contextMenu.branchName !== currentBranch
+            ? [contextMenu.branchName]
+            : compareTargets(contextMenu.commit, currentBranch)
+          ).map(name => (
+            <button
+              key={name}
+              onClick={() => {
+                onCompareBranch?.(name);
+                setContextMenu(prev => ({ ...prev, visible: false }));
+              }}
+              className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2"
+            >
+              <GitBranch className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="truncate">Compare {name} with Current</span>
+            </button>
+          ))}
 
           <button
             onClick={() => {

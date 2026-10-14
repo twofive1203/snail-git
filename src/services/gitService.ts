@@ -19,6 +19,7 @@ export interface RepoSnapshot {
   behindCount: number;
   dirtyFilesCount: number;
   gitVersion: string;
+  userName: string;
   changes: FileChange[];
   commits: GitCommit[];
   branches: GitBranch[];
@@ -115,6 +116,14 @@ export async function unstagePaths(repoPath: string, paths: string[]): Promise<v
 
 export async function discardPaths(repoPath: string, paths: string[]): Promise<void> {
   await invokeTauri('discard_paths', { repoPath, paths });
+}
+
+export async function appendGitignore(repoPath: string, path: string): Promise<string> {
+  return invokeTauri<string>('append_gitignore', { repoPath, path });
+}
+
+export async function deleteUnversioned(repoPath: string, path: string): Promise<string> {
+  return invokeTauri<string>('delete_unversioned', { repoPath, path });
 }
 
 export async function applyChunk(repoPath: string, rawPatch: string, action: 'stage' | 'unstage' | 'rollback'): Promise<void> {

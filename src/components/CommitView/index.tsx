@@ -6,8 +6,11 @@ import { CommitActionBox } from './CommitActionBox';
 
 interface CommitViewProps {
   changes: FileChange[];
+  lastCommitMessage?: string;
   onCommit: (msg: string, amend: boolean, andPush: boolean) => void;
   onShelve: () => void;
+  onAddToGitignore?: (path: string) => void;
+  onDeleteUnversioned?: (file: FileChange) => void;
   onToggleFileStage: (file: FileChange, staged: boolean) => void;
   onBatchToggleStage: (files: FileChange[], staged: boolean) => void;
   onToggleAllStage: (staged: boolean) => void;
@@ -26,8 +29,11 @@ interface CommitViewProps {
 
 export const CommitView: React.FC<CommitViewProps> = ({
   changes,
+  lastCommitMessage,
   onCommit,
   onShelve,
+  onAddToGitignore,
+  onDeleteUnversioned,
   onToggleFileStage,
   onBatchToggleStage,
   onToggleAllStage,
@@ -87,6 +93,8 @@ export const CommitView: React.FC<CommitViewProps> = ({
           if (selectedFile) onRollbackFile(selectedFile);
         }}
         onRefresh={onRefresh}
+        onAddToGitignore={onAddToGitignore}
+        onDeleteUnversioned={onDeleteUnversioned}
         repoKey={repoKey}
       />
 
@@ -112,6 +120,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
 
         <CommitActionBox
           stagedFilesCount={stagedCount}
+          lastCommitMessage={lastCommitMessage}
           onCommit={(msg, isAmend) => onCommit(msg, isAmend, false)}
           onCommitAndPush={(msg, isAmend) => onCommit(msg, isAmend, true)}
           onShelve={onShelve}

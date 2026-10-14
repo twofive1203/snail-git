@@ -143,6 +143,16 @@ fn discard_paths(repo_path: String, paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn append_gitignore(repo_path: String, path: String) -> Result<String, String> {
+    git_ops::append_gitignore(&repo_path, &path)
+}
+
+#[tauri::command]
+fn delete_unversioned(repo_path: String, path: String) -> Result<String, String> {
+    git_ops::delete_unversioned(&repo_path, &path)
+}
+
+#[tauri::command]
 fn apply_chunk(repo_path: String, raw_patch: String, action: String) -> Result<(), String> {
     git_ops::apply_chunk(&repo_path, &raw_patch, &action)
 }
@@ -403,6 +413,10 @@ fn open_main_window(app: &tauri::App) -> Result<(), tauri::Error> {
         return tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
             .title("EasyGit - IDEA Style Git Manager")
             .inner_size(1280.0, 820.0)
+            .min_inner_size(900.0, 600.0)
+            .resizable(true)
+            .decorations(false)
+            .shadow(true)
             .data_directory(dir)
             .build()
             .map(|_| ())
@@ -445,6 +459,8 @@ pub fn run() {
             stage_paths,
             unstage_paths,
             discard_paths,
+            append_gitignore,
+            delete_unversioned,
             apply_chunk,
             commit_changes,
             checkout_branch,

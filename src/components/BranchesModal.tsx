@@ -235,7 +235,9 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                   onCompare?.(selectedBranchForAction.name);
                   finish();
                 }}
-                className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary"
+                disabled={selectedBranchForAction.name === currentBranch}
+                title="列出该分支与当前分支的全部差异文件，可双击查看双栏 Diff"
+                className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <Layers className="w-3.5 h-3.5 text-amber-400" />
                 <span>Compare with Current</span>

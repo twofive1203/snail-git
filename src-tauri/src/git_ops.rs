@@ -307,6 +307,7 @@ pub struct RepoSnapshot {
     pub behind_count: u32,
     pub dirty_files_count: u32,
     pub git_version: String,
+    pub user_name: String,
     pub changes: Vec<FileChangeDto>,
     pub commits: Vec<GitCommitDto>,
     pub branches: Vec<GitBranchDto>,
@@ -1256,6 +1257,7 @@ pub fn load_snapshot(repo: &str) -> Result<RepoSnapshot, String> {
         .ok()
         .and_then(|o| ensure_ok(&o, "git version").ok())
         .unwrap_or_else(|| "git".into());
+    let user_name = configured_user_name(&top);
     Ok(RepoSnapshot {
         dirty_files_count: changes.len() as u32,
         commits: git_log(&top).unwrap_or_default(),
@@ -1267,8 +1269,18 @@ pub fn load_snapshot(repo: &str) -> Result<RepoSnapshot, String> {
         ahead_count: ahead,
         behind_count: behind,
         git_version: version,
+        user_name,
         changes,
     })
+}
+
+fn configured_user_name(repo: &str) -> String {
+    run_git(repo, &["config", "--get", "user.name"], Duration::from_secs(5))
+        .ok()
+        .and_then(|output| ensure_ok(&output, "user.name").ok())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_default()
 }
 
 fn split_hunks(diff_text: &str, staged: bool, id_prefix: &str) -> Vec<DiffChunkDto> {
@@ -1663,6 +1675,85 @@ pub fn discard_paths(repo: &str, paths: &[String]) -> Result<(), String> {
         ensure_ok(&output, "回滚文件")?;
     }
     Ok(())
+}
+
+fn gitignore_line(rel: &str, is_dir: bool) -> String {
+    let normalized = rel.replace('\\', "/");
+    let trimmed = normalized.trim_matches('/');
+    let escaped: String = trimmed
+        .chars()
+        .flat_map(|ch| {
+            if matches!(ch, ' ' | '#' | '!' | '*' | '?' | '[' | ']') {
+                vec!['\\', ch]
+            } else {
+                vec![ch]
+            }
+        })
+        .collect();
+    if is_dir {
+        format!("{escaped}/")
+    } else {
+        escaped
+    }
+}
+
+fn ignore_line_matches(existing: &str, pattern: &str) -> bool {
+    let norm = |value: &str| {
+        value
+            .trim()
+            .trim_end_matches('/')
+            .replace("\\ ", " ")
+            .replace('\\', "")
+    };
+    let target = norm(pattern);
+    existing.lines().any(|line| {
+        let line = line.trim();
+        !line.is_empty() && !line.starts_with('#') && norm(line) == target
+    })
+}
+
+pub fn append_gitignore(repo: &str, path: &str) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    let rel = safe_rel(path)?;
+    let full = Path::new(&top).join(&rel);
+    let pattern = gitignore_line(&rel, full.is_dir());
+    let ignore_path = Path::new(&top).join(".gitignore");
+    let mut existing = if ignore_path.exists() {
+        fs::read_to_string(&ignore_path).map_err(|err| format!("读取 .gitignore 失败：{err}"))?
+    } else {
+        String::new()
+    };
+    if ignore_line_matches(&existing, &pattern) {
+        return Ok(format!("已在 .gitignore 中：{pattern}"));
+    }
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        existing.push('\n');
+    }
+    existing.push_str(&pattern);
+    existing.push('\n');
+    fs::write(&ignore_path, existing).map_err(|err| format!("写入 .gitignore 失败：{err}"))?;
+    Ok(format!("已加入 .gitignore：{pattern}"))
+}
+
+pub fn delete_unversioned(repo: &str, path: &str) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    let rel = safe_rel(path)?;
+    let status = status_files(&top)?;
+    let file = status.iter().find(|item| item.path.replace('\\', "/") == rel);
+    if file.map(|item| item.status.as_str() != "untracked").unwrap_or(true) {
+        return Err("只能删除未版本管理的文件".into());
+    }
+    let full = Path::new(&top).join(&rel);
+    if !full.is_file() {
+        return Err("只能删除未版本管理的文件，目录请先加入 .gitignore".into());
+    }
+    let canon = fs::canonicalize(&full).map_err(|err| format!("无法定位文件：{err}"))?;
+    let root = fs::canonicalize(&top).map_err(|err| err.to_string())?;
+    if !canon.starts_with(&root) {
+        return Err("拒绝删除仓库外文件".into());
+    }
+    fs::remove_file(&canon).map_err(|err| format!("删除失败：{err}"))?;
+    Ok(format!("已删除 {rel}"))
 }
 
 fn run_git_with_stdin(cwd: &str, args: &[&str], stdin_text: &str, timeout: Duration) -> Result<Output, String> {
@@ -3160,6 +3251,13 @@ pub fn reveal_path(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gitignore_line_keeps_filename_and_directory_slash() {
+        assert_eq!(gitignore_line(r"src\Foo Bar.ts", false), "src/Foo\\ Bar.ts");
+        assert_eq!(gitignore_line("build/out/", true), "build/out/");
+        assert!(ignore_line_matches("src/Foo\\ Bar.ts\n", "src/Foo\\ Bar.ts"));
+    }
 
     #[test]
     fn branch_status_keeps_dots_in_branch_names() {

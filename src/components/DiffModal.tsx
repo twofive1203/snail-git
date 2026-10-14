@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { DiffChunk, RevisionFile } from '../types/git';
 import { SideBySideDiff } from './CommitView/SideBySideDiff';
+import { FilePathDisplay } from './common/FilePathDisplay';
 import { X } from 'lucide-react';
 
 interface DiffModalProps {
@@ -45,16 +46,26 @@ export const DiffModal: React.FC<DiffModalProps> = ({ title, files, onLoad, onCl
         <div className="flex-1 flex min-h-0">
           <div className="w-72 border-r border-jb-border overflow-auto p-1 text-xs">
             {files.length === 0 && <div className="p-3 text-jb-text-muted">没有差异文件</div>}
+            <div className="px-2 py-1 text-[10px] text-jb-text-muted">单击或双击查看双栏 Diff</div>
             {files.map(file => (
-              <button
+              <div
                 key={file.path}
+                role="button"
+                tabIndex={0}
                 onClick={() => setSelected(file.path)}
-                className={`w-full text-left px-2 py-1.5 rounded font-mono truncate ${file.path === current?.path ? 'bg-jb-selected text-white' : 'hover:bg-jb-hover'}`}
+                onDoubleClick={() => setSelected(file.path)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') setSelected(file.path);
+                }}
+                title="单击或双击查看双栏 Diff"
+                className={`w-full text-left px-2 py-1.5 rounded cursor-pointer ${file.path === current?.path ? 'bg-jb-selected text-white' : 'hover:bg-jb-hover'}`}
               >
-                {file.path}
-                <span className="ml-2 text-[10px] text-jb-green">+{file.additions}</span>
-                <span className="ml-1 text-[10px] text-jb-red">-{file.deletions}</span>
-              </button>
+                <FilePathDisplay path={file.path} />
+                <div className="pl-0 text-[10px]">
+                  <span className="text-jb-green">+{file.additions}</span>
+                  <span className="ml-1 text-jb-red">-{file.deletions}</span>
+                </div>
+              </div>
             ))}
           </div>
           <div className="flex-1 min-w-0 flex flex-col">

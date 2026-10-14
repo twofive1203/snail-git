@@ -1,17 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileChange, DiffLine } from '../../types/git';
+import { FilePathDisplay } from '../common/FilePathDisplay';
 import { 
   Columns, 
   AlignJustify, 
   ChevronUp, 
   ChevronDown, 
-  Check, 
-  X, 
   ChevronsRight, 
-  Settings, 
   Code2, 
-  CheckSquare, 
-  Square 
+  Undo2,
 } from 'lucide-react';
 
 interface SideBySideDiffProps {
@@ -68,10 +65,15 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   }));
 
   useEffect(() => {
+    setCurrentChunkIndex(0);
+  }, [file?.id]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'F7' || chunks.length === 0) return;
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
       e.preventDefault();
       setCurrentChunkIndex((idx) => e.shiftKey
         ? Math.max(0, idx - 1)
@@ -82,7 +84,15 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   }, [chunks.length]);
 
   useEffect(() => {
-    chunkRefs.current[currentChunkIndex]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const node = chunkRefs.current[currentChunkIndex];
+    if (!node) return;
+    const scroller = node.closest('.overflow-auto') as HTMLElement | null;
+    if (!scroller) {
+      node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+      return;
+    }
+    const delta = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - Math.max(24, (scroller.clientHeight - node.clientHeight) / 3);
+    scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: 'smooth' });
   }, [currentChunkIndex, file?.id]);
 
   if (!file) {
@@ -100,9 +110,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
         {/* 左侧：文件路径与对比基准 */}
         <div className="flex items-center space-x-2 min-w-0">
           <Code2 className="w-4 h-4 text-jb-blue shrink-0" />
-          <span className="font-mono text-jb-text-primary font-medium truncate">
-            {file.path}
-          </span>
+          <FilePathDisplay path={file.path} className="flex-1 min-w-0" />
           <span className="text-[11px] text-jb-text-muted font-sans hidden md:inline">
             ({baselineLabel})
           </span>
@@ -202,55 +210,30 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
             <div 
               key={chunk.id}
               ref={(node) => { chunkRefs.current[cIdx] = node; }}
-              className={`border-y border-jb-border/40 my-2 ${
-                cIdx === currentChunkIndex ? 'ring-1 ring-jb-blue/40 bg-jb-blue/5' : ''
+              className={`relative group/chunk scroll-mt-4 ${chunk.isStaged ? 'border-l-2 border-l-emerald-500/70' : ''} ${
+                cIdx === currentChunkIndex ? 'bg-jb-blue/[0.07] ring-1 ring-inset ring-jb-blue/30' : ''
               }`}
             >
-              {/* Chunk 头部操作条 (IDEA 核心：行级/块级提交控制器) */}
-              <div className="bg-jb-panel/90 px-3 py-1 flex items-center justify-between border-b border-jb-border/50 text-[11px]">
-                <div className="flex items-center space-x-2">
+              {!readOnly && (
+                <div className={`absolute top-0.5 z-20 flex flex-col gap-0.5 opacity-0 pointer-events-none group-hover/chunk:opacity-100 group-hover/chunk:pointer-events-auto ${isUnified ? 'left-20' : 'left-1/2 -translate-x-1/2'}`}>
                   <button
                     onClick={() => onToggleChunkStage(chunk.id)}
-                    className={`flex items-center space-x-1 text-jb-blue hover:text-jb-blueHover focus:outline-none ${readOnly ? 'hidden' : ''}`}
-                    title="勾选/取消此块提交 (Partial Commit)"
-                  >
-                    {chunk.isStaged ? (
-                      <CheckSquare className="w-3.5 h-3.5" />
-                    ) : (
-                      <Square className="w-3.5 h-3.5 text-jb-text-muted" />
-                    )}
-                    <span className="font-sans font-medium">
-                      {chunk.isStaged ? 'Staged Chunk' : 'Unstaged Chunk'}
-                    </span>
-                  </button>
-                  <span className="text-jb-text-muted">
-                    @@ -{chunk.oldStart},{chunk.oldLines} +{chunk.newStart},{chunk.newLines} @@
-                  </span>
-                </div>
-
-                <div className={`flex items-center space-x-1.5 ${readOnly ? 'hidden' : ''}`}>
-                  <button
-                    onClick={() => onToggleChunkStage(chunk.id)}
-                    className="flex items-center space-x-1 px-2 py-0.5 rounded bg-jb-blue/15 hover:bg-jb-blue/25 text-jb-blue border border-jb-blue/30"
-                    title="将本代码块应用到提交中"
+                    title={`${chunk.isStaged ? '取消暂存此块' : '应用此块暂存'}（@@ -${chunk.oldStart},${chunk.oldLines} +${chunk.newStart},${chunk.newLines}）`}
+                    className="w-5 h-5 rounded border border-jb-blue/40 bg-jb-panel/95 text-jb-blue hover:bg-jb-blue/20 flex items-center justify-center shadow-sm"
                   >
                     <ChevronsRight className="w-3 h-3" />
-                    <span>Apply Chunk</span>
                   </button>
-
                   <button
                     onClick={() => onRevertChunk(chunk.id)}
-                    className="flex items-center space-x-1 px-2 py-0.5 rounded bg-jb-red/15 hover:bg-jb-red/25 text-jb-red border border-jb-red/30"
-                    title="丢弃/回滚此代码块修改"
+                    title="回滚丢弃此块变更"
+                    className="w-5 h-5 rounded border border-rose-500/40 bg-jb-panel/95 text-rose-300 hover:bg-rose-500/20 flex items-center justify-center shadow-sm"
                   >
-                    <X className="w-3 h-3" />
-                    <span>Rollback</span>
+                    <Undo2 className="w-3 h-3" />
                   </button>
                 </div>
-              </div>
+              )}
 
-              {/* 逐行比对 */}
-              <div className="divide-y divide-jb-border/20">
+              <div>
                 {chunk.lines.map((line, lIdx) => {
                   const isAdd = line.type === 'added';
                   const isDel = line.type === 'deleted';
@@ -289,10 +272,16 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-center bg-jb-panel/40 border-r border-jb-border/40 select-none">
-                        {isAdd && <span className="text-jb-green font-bold text-xs">+</span>}
-                        {isDel && <span className="text-jb-red font-bold text-xs">-</span>}
-                        {isMod && <span className="text-jb-blue font-bold text-xs">~</span>}
+                      <div
+                        title={lIdx === 0 ? `@@ -${chunk.oldStart},${chunk.oldLines} +${chunk.newStart},${chunk.newLines} @@` : undefined}
+                        className="relative flex flex-col items-center justify-center bg-jb-panel/40 border-r border-jb-border/40 select-none"
+                      >
+                        {lIdx === 0 && (
+                          <span className="text-[8px] leading-none text-[#6F737A] font-mono">@@</span>
+                        )}
+                        {isAdd && <span className="text-jb-green font-bold text-xs leading-none">+</span>}
+                        {isDel && <span className="text-jb-red font-bold text-xs leading-none">-</span>}
+                        {isMod && <span className="text-jb-blue font-bold text-xs leading-none">~</span>}
                       </div>
 
                       <div className={`flex ${isAdd || isMod ? 'bg-emerald-950/20 text-emerald-100' : ''}`}>
