@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Archive } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 interface ShelveDialogProps {
   open: boolean;
@@ -17,6 +18,7 @@ export const ShelveDialog: React.FC<ShelveDialogProps> = ({
   onCancel,
   onConfirm,
 }) => {
+  const { t } = useI18n();
   const [name, setName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -40,16 +42,16 @@ export const ShelveDialog: React.FC<ShelveDialogProps> = ({
       >
         <div className="flex items-center space-x-2 text-sm font-semibold text-[#DFE1E5]">
           <Archive className="w-4 h-4 text-amber-400" />
-          <span>Shelve Changes</span>
+          <span>{t('shelf.dialogTitle')}</span>
         </div>
         <p className="mt-2 text-[#9DA0A8] leading-relaxed">{hint}</p>
         <label className="mt-3 block text-[11px] text-[#8C9099]">
-          架藏名称
+          {t('shelf.name')}
           <input
             ref={inputRef}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder={`Shelf · ${fileCount} files`}
+            placeholder={t('shelf.namePlaceholder', { count: fileCount })}
             className="mt-1 w-full bg-[#2B2D30] border border-[#393B40] rounded px-2.5 py-1.5 text-xs text-[#DFE1E5] placeholder-[#6F737A] focus:outline-none focus:border-[#3574F0]"
           />
         </label>
@@ -59,13 +61,13 @@ export const ShelveDialog: React.FC<ShelveDialogProps> = ({
             onClick={onCancel}
             className="px-3 py-1.5 rounded border border-[#393B40] text-[#DFE1E5] hover:bg-[#2B2D30]"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             type="submit"
             className="px-3 py-1.5 rounded bg-[#3574F0] hover:bg-[#4682F7] text-white font-medium"
           >
-            架藏
+            {t('shelf.confirm')}
           </button>
         </div>
       </form>

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { AlertTriangle, ArrowRight, GitMerge, Info, Loader2, X } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 export interface ConfirmAction {
   /** 选择该动作时回传给后端的值，对应 git_ops::update_response。 */
@@ -45,6 +46,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   busy = false,
   busyLabel,
 }) => {
+  const { t } = useI18n();
   const cardRef = useRef<HTMLDivElement>(null);
   const primaryRef = useRef<HTMLButtonElement>(null);
 
@@ -94,7 +96,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             onClick={onCancel}
             disabled={busy}
             className="p-1 rounded hover:bg-jb-hover text-jb-text-muted hover:text-jb-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
-            title="取消"
+            title={t('common.cancel')}
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -111,7 +113,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             <div className="rounded border border-jb-border bg-jb-bg/60 overflow-hidden">
               <div className="px-2.5 py-1 text-[10px] uppercase tracking-wider text-jb-text-muted bg-jb-bg/60 border-b border-jb-border flex items-center space-x-1.5">
                 <GitMerge className="w-3 h-3 text-jb-orange" />
-                <span>{filesHint || `${files.length} 个文件`}</span>
+                <span>{filesHint || t('common.files', { count: files.length })}</span>
               </div>
               <ul className="max-h-40 overflow-y-auto py-1">
                 {files.map(file => (
@@ -130,7 +132,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           {busy && (
             <div className="flex items-center space-x-2 text-jb-blue">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span>{busyLabel || '正在执行…'}</span>
+              <span>{busyLabel || t('common.busy')}</span>
             </div>
           )}
         </div>
@@ -153,7 +155,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             disabled={busy}
             className="px-3 py-1.5 rounded border border-jb-border bg-transparent text-jb-text-secondary hover:bg-jb-hover hover:text-jb-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            取消
+            {t('common.cancel')}
           </button>
         </div>
       </div>

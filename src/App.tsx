@@ -75,6 +75,8 @@ import {
   mockStashes,
 } from './mock/gitData';
 import { ConfirmDialog, type ConfirmAction } from './components/common/ConfirmDialog';
+import type { MessageKey } from './i18n';
+import { useI18n } from './i18n/react';
 
 /** 更新/推送被后端拦下时的确认框状态；等待用户选择期间操作锁已释放。 */
 interface PendingConfirm {
@@ -84,17 +86,21 @@ interface PendingConfirm {
 }
 
 /** 远程会覆盖未提交改动时只提供贮藏。不贮藏再试必然失败，变基也不再单独给“仍然变基”。 */
-const confirmActions = (pending: PendingConfirm | null): ConfirmAction[] => {
+const confirmActions = (
+  pending: PendingConfirm | null,
+  label: (key: MessageKey) => string,
+): ConfirmAction[] => {
   if (!pending) return [];
   if (pending.kind === 'push') {
-    return [{ value: 'continue', label: '确认并推送', tone: 'primary', icon: <ArrowUp className="w-3.5 h-3.5" /> }];
+    return [{ value: 'continue', label: label('confirm.push'), tone: 'primary', icon: <ArrowUp className="w-3.5 h-3.5" /> }];
   }
   return [
-    { value: 'stash', label: '贮藏后更新（推荐）', tone: 'primary', icon: <Archive className="w-3.5 h-3.5" /> },
+    { value: 'stash', label: label('confirm.stashUpdate'), tone: 'primary', icon: <Archive className="w-3.5 h-3.5" /> },
   ];
 };
 
 export function App() {
+  const { t } = useI18n();
   const [native, setNative] = useState(() => isTauriEnvironment());
   const [repositories, setRepositories] = useState<GitRepository[]>(() => isTauriEnvironment() ? [] : mockRepositories);
   const [activeRepoId, setActiveRepoId] = useState<string>(() => isTauriEnvironment() ? '' : 'repo-1');
@@ -107,7 +113,7 @@ export function App() {
   const [currentUser, setCurrentUser] = useState(native ? '' : 'Li Chong');
   const [syncAction, setSyncAction] = useState<SyncAction | null>(null);
   const [shelveDraft, setShelveDraft] = useState<{ paths: string[]; count: number; includesUnstaged: boolean } | null>(null);
-  const [gitVersion, setGitVersion] = useState(native ? 'Git' : '未连接 Git');
+  const [gitVersion, setGitVersion] = useState('Git');
   const [branches, setBranches] = useState(native ? [] : mockBranches);
   const [commits, setCommits] = useState(native ? [] : mockCommits);
   const [changes, setChanges] = useState<FileChange[]>(native ? [] : mockCurrentChanges);
@@ -210,16 +216,16 @@ export function App() {
 
   const run = useCallback(async (label: string, action: () => Promise<string | void>) => {
     if (!isTauriEnvironment() || !activeRepo) {
-      showToast('浏览器预览不会改动真实仓库，请用 pnpm tauri dev', true);
+      showToast(t('toast.previewNoWrite'), true);
       return false;
     }
     if (opLock.current) return false;
     opLock.current = true;
     setOpsLocked(true);
-    setBusyLabel('正在执行…');
+    setBusyLabel(t('common.busy'));
     try {
       const text = await action();
-      showToast(text ? `${label}：${String(text).split('\n')[0]}` : label);
+      showToast(text ? t('toast.withDetail', { label, detail: String(text).split('\n')[0] }) : label);
       setBusyLabel(null);
       await refresh(activeRepo.path);
       return true;
@@ -235,7 +241,7 @@ export function App() {
 
   const guardNetwork = useCallback(async (kind: SyncAction, action: (repoPath: string) => Promise<void>) => {
     if (!isTauriEnvironment() || !activeRepo) {
-      showToast('浏览器预览不会改动真实仓库，请用 pnpm tauri dev', true);
+      showToast(t('toast.previewNoWrite'), true);
       return;
     }
     if (opLock.current) return;
@@ -243,7 +249,7 @@ export function App() {
     opLock.current = true;
     setOpsLocked(true);
     setSyncAction(kind);
-    setBusyLabel('正在连接远程，若弹出登录窗口请完成登录');
+    setBusyLabel(t('toast.connecting'));
     acceptProgress.current = true;
     try {
       await setWatchPaused(true);
@@ -261,7 +267,7 @@ export function App() {
     applySyncCounts(repoPath, outcome);
     // blocked 表示这次操作根本没生效，不能拿成功图标糊弄用户。
     const failed = outcome.status === 'blocked' || outcome.status === 'failed';
-    showToast(outcome.message || '完成', failed);
+    showToast(outcome.message || t('common.done'), failed);
     acceptProgress.current = false;
     setBusyLabel(null);
     await refresh(repoPath);
@@ -298,8 +304,8 @@ export function App() {
 
   const cancelConfirm = useCallback(() => {
     setPendingConfirm(null);
-    showToast('已取消');
-  }, []);
+    showToast(t('common.cancelled'));
+  }, [t]);
 
   const chooseConfirm = useCallback((value: string) => {
     const pending = pendingConfirm;
@@ -316,7 +322,7 @@ export function App() {
     void guardNetwork('update', async (repoPath) => {
       const outcome = await updateRepo(repoPath, value as UpdateResponse);
       if (outcome.status === 'cancelled') {
-        showToast('已取消更新');
+        showToast(t('toast.updateCancelled'));
         await refresh(repoPath);
         return;
       }
@@ -336,7 +342,7 @@ export function App() {
   const handleFetch = useCallback(() => {
     void guardNetwork('fetch', async (repoPath) => {
       const text = await fetchRepo(repoPath);
-      showToast(text ? `已刷新远程：${text.split('\n')[0]}` : '已刷新远程');
+      showToast(text ? t('toast.fetchedDetail', { detail: text.split('\n')[0] }) : t('toast.fetched'));
       acceptProgress.current = false;
       setBusyLabel(null);
       await refresh(repoPath);
@@ -400,7 +406,7 @@ export function App() {
       if (repo.id === 'repo-3') setChanges([]);
       else if (repo.id === 'repo-2') setChanges(mockCurrentChanges.slice(0, 5));
       else setChanges(mockCurrentChanges);
-      showToast(`已切换至项目: ${repo.name}`);
+      showToast(t('toast.switchedProject', { name: repo.name }));
     }
   };
 
@@ -419,14 +425,14 @@ export function App() {
       };
       setRepositories(prev => [repo, ...prev]);
       setActiveRepoId(repo.id);
-      showToast(`预览模式已添加 ${name}，不会读取磁盘`);
+      showToast(t('toast.previewAdded', { name }));
       return;
     }
     try {
       const repo = await addSavedRepo(name, path);
       setRepositories(prev => [repo, ...prev.filter(item => item.id !== repo.id)]);
       setActiveRepoId(repo.id);
-      showToast(`已打开仓库：${repo.name}`);
+      showToast(t('toast.openedRepo', { name: repo.name }));
     } catch (err) {
       showToast(String(err), true);
     }
@@ -440,7 +446,7 @@ export function App() {
     const repos = await removeSavedRepo(repoId);
     setRepositories(repos);
     if (activeRepoId === repoId) setActiveRepoId(repos[0]?.id || '');
-    showToast('已从列表移除，本地文件未删除');
+    showToast(t('toast.removedFromList'));
   };
 
   const handleToggleFavorite = async (repoId: string) => {
@@ -452,14 +458,14 @@ export function App() {
   };
 
   const handleToggleFile = (file: FileChange, staged: boolean) => {
-    void run(staged ? '已暂存' : '已取消暂存', () =>
+    void run(staged ? t('toast.staged') : t('toast.unstaged'), () =>
       staged ? stagePaths(activeRepo.path, [file.path]) : unstagePaths(activeRepo.path, [file.path])
     );
   };
 
   const handleBatch = (files: FileChange[], staged: boolean) => {
     const paths = files.map(f => f.path);
-    void run(staged ? '已暂存所选文件' : '已取消暂存所选文件', () =>
+    void run(staged ? t('toast.stagedSelected') : t('toast.unstagedSelected'), () =>
       staged ? stagePaths(activeRepo.path, paths) : unstagePaths(activeRepo.path, paths)
     );
   };
@@ -467,10 +473,10 @@ export function App() {
   const handleChunk = (file: FileChange, chunkId: string) => {
     const chunk = file.chunks.find(c => c.id === chunkId);
     if (!chunk?.rawPatch) {
-      showToast('这个差异块没有可应用的补丁', true);
+      showToast(t('toast.chunkNoPatch'), true);
       return;
     }
-    void run(chunk.isStaged ? '已取消暂存该块' : '已暂存该块', () =>
+    void run(chunk.isStaged ? t('toast.chunkUnstaged') : t('toast.chunkStaged'), () =>
       applyChunk(activeRepo.path, chunk.rawPatch!, chunk.isStaged ? 'unstage' : 'stage')
     );
   };
@@ -478,8 +484,8 @@ export function App() {
   const handleRevertChunk = (file: FileChange, chunkId: string) => {
     const chunk = file.chunks.find(c => c.id === chunkId);
     if (!chunk?.rawPatch) return;
-    if (!confirm('丢弃这个代码块的修改？此操作不可用普通撤销恢复。')) return;
-    void run('已回滚该代码块', () => applyChunk(activeRepo.path, chunk.rawPatch!, 'rollback'));
+    if (!confirm(t('toast.chunkDiscardConfirm'))) return;
+    void run(t('toast.chunkRolledBack'), () => applyChunk(activeRepo.path, chunk.rawPatch!, 'rollback'));
   };
 
   const requestDiff = useCallback((file: FileChange) => {
@@ -505,7 +511,7 @@ export function App() {
 
   const openRevision = useCallback(async (title: string, spec: string, mode: 'commit' | 'worktree' | 'range', onlyPath?: string) => {
     if (!isTauriEnvironment() || !activeRepo) {
-      showToast('浏览器预览没有真实提交差异', true);
+      showToast(t('toast.previewNoCommitDiff'), true);
       return;
     }
     try {
@@ -538,23 +544,23 @@ export function App() {
 
   const handleDeleteBranch = async (branch: { name: string; isRemote?: boolean }, force = false) => {
     if (!isTauriEnvironment() || !activeRepo) {
-      showToast('浏览器预览不会改动真实仓库，请用 pnpm tauri dev', true);
+      showToast(t('toast.previewNoWrite'), true);
       return;
     }
     if (!force) {
       const warning = branch.isRemote
-        ? `删除远程分支 ${branch.name}？这会推送删除，不能撤销。`
-        : `删除本地分支 ${branch.name}？`;
+        ? t('toast.deleteRemoteBranch', { name: branch.name })
+        : t('toast.deleteLocalBranch', { name: branch.name });
       if (!confirm(warning)) return;
     }
     try {
       const text = await deleteBranch(activeRepo.path, branch.name, Boolean(branch.isRemote), force);
-      showToast(text || '已删除分支');
+      showToast(text || t('toast.branchDeleted'));
       await refresh(activeRepo.path);
     } catch (err) {
       const message = String(err);
       if (!force && !branch.isRemote && /not fully merged|not merged/i.test(message)) {
-        if (confirm('这个分支还没有完全合并。强制删除？')) {
+        if (confirm(t('toast.forceDeleteBranch'))) {
           await handleDeleteBranch(branch, true);
         }
         return;
@@ -603,7 +609,7 @@ export function App() {
     const staged = changes.filter(file => file.isStaged).map(file => file.path);
     const count = staged.length || changes.length;
     if (count === 0) {
-      showToast('没有可架藏的更改', true);
+      showToast(t('toast.nothingToShelve'), true);
       return;
     }
     setShelveDraft({ paths: staged, count, includesUnstaged: staged.length === 0 });
@@ -613,10 +619,10 @@ export function App() {
     const draft = shelveDraft;
     setShelveDraft(null);
     if (!draft || !activeRepo) return;
-    void run('已架藏', async () => {
+    void run(t('toast.shelved'), async () => {
       await createShelf(activeRepo.path, name, draft.paths);
       setActiveTab('shelf');
-      return '变更已保存到本地 Shelf';
+      return t('toast.shelvedDetail');
     });
   };
 
@@ -668,8 +674,8 @@ export function App() {
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
       <WindowResizeFrame />
       <Header
-        currentRepoName={activeRepo?.name || (native ? '未打开仓库' : 'easy-git')}
-        currentRepoPath={activeRepo?.path || (native ? '点击添加一个本地 Git 仓库' : '')}
+        currentRepoName={activeRepo?.name || (native ? t('header.noRepo') : 'easy-git')}
+        currentRepoPath={activeRepo?.path || (native ? t('header.addRepoHint') : '')}
         repositories={repositories}
         activeRepoId={activeRepoId}
         onSelectRepo={handleSelectRepo}
@@ -678,7 +684,7 @@ export function App() {
         onRemoveRepo={(id) => { void handleRemoveRepo(id); }}
         onRevealRepo={(repo) => {
           if (!isTauriEnvironment()) {
-            showToast('浏览器预览不能打开资源管理器', true);
+            showToast(t('toast.previewNoExplorer'), true);
             return;
           }
           void revealPath(repo.path).catch(err => showToast(String(err), true));
@@ -701,11 +707,11 @@ export function App() {
         }}
         onRollbackClick={() => {
           if (!activeRepo || changes.length === 0) {
-            showToast('没有可回滚的更改', true);
+            showToast(t('toast.nothingToRollback'), true);
             return;
           }
-          if (confirm(`回滚全部 ${changes.length} 个更改到 HEAD？此操作不可用普通撤销恢复。`)) {
-            void run('已回滚工作区', () => discardPaths(activeRepo.path, changes.map(file => file.path)));
+          if (confirm(t('toast.rollbackAllConfirm', { count: changes.length }))) {
+            void run(t('toast.rolledBack'), () => discardPaths(activeRepo.path, changes.map(file => file.path)));
           }
         }}
         onShelfClick={() => setActiveTab('shelf')}
@@ -723,7 +729,7 @@ export function App() {
             <div className="flex items-center space-x-2">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span>
-                检测到 <strong className="text-amber-300 font-mono">{changes.filter(file => file.status === 'conflict').length}</strong> 个文件存在合并冲突，需要解决冲突后才能继续操作。
+                {t('app.conflictBanner', { count: changes.filter(file => file.status === 'conflict').length })}
               </span>
             </div>
             <button
@@ -735,7 +741,7 @@ export function App() {
               className="px-2.5 py-0.5 rounded bg-amber-500/30 hover:bg-amber-500/40 text-amber-200 border border-amber-500/50 font-medium transition-colors text-xs flex items-center space-x-1"
             >
               <GitMerge className="w-3 h-3 text-amber-300" />
-              <span>立即解决冲突</span>
+              <span>{t('app.resolveNow')}</span>
             </button>
           </div>
         )}
@@ -743,12 +749,12 @@ export function App() {
         {!activeRepo && (
           <div className="flex-1 flex flex-col items-center justify-center text-sm text-[#8C9099] space-y-3">
             <FolderGit2 className="w-12 h-12 text-[#3574F0]/40 stroke-1" />
-            <p>当前未打开任何 Git 仓库</p>
+            <p>{t('app.noRepo')}</p>
             <button
               onClick={() => setIsAddRepoOpen(true)}
               className="px-3.5 py-1.5 rounded bg-[#3574F0] hover:bg-[#3574F0]/90 text-white font-medium text-xs transition-colors shadow-sm"
             >
-              + 添加本地 Git 仓库
+              {t('app.addRepo')}
             </button>
           </div>
         )}
@@ -759,18 +765,18 @@ export function App() {
               onOpenFileDiff={(commit, path) => {
                 void openRevision(`${commit.shortHash} ${path}`, commit.hash, 'commit', path);
               }}
-              onShowDiffWithLocal={(commit) => void openRevision(`Diff with Local ${commit.shortHash}`, commit.hash, 'worktree')}
-              onParentMissing={(hash) => showToast(`父提交 ${hash.slice(0, 8)} 不在当前加载的历史里`, true)}
-              onCheckout={(hash) => void run('已检出该提交', () => checkoutBranch(activeRepo.path, hash))}
-              onCherryPick={(hash) => void run('挑拣完成', () => cherryPick(activeRepo.path, hash))}
-              onRevert={(hash) => void run('已还原该提交', () => revertCommit(activeRepo.path, hash))}
-              onReset={(hash) => void run('已混合重置', () => resetTo(activeRepo.path, hash))}
+              onShowDiffWithLocal={(commit) => void openRevision(t('app.diffWithLocal', { hash: commit.shortHash }), commit.hash, 'worktree')}
+              onParentMissing={(hash) => showToast(t('toast.parentMissing', { hash: hash.slice(0, 8) }), true)}
+              onCheckout={(hash) => void run(t('toast.checkedOutCommit'), () => checkoutBranch(activeRepo.path, hash))}
+              onCherryPick={(hash) => void run(t('toast.cherryPicked'), () => cherryPick(activeRepo.path, hash))}
+              onRevert={(hash) => void run(t('toast.reverted'), () => revertCommit(activeRepo.path, hash))}
+              onReset={(hash) => void run(t('toast.reset'), () => resetTo(activeRepo.path, hash))}
               currentBranch={currentBranch}
               currentUser={currentUser}
-              onCompareBranch={(name) => void openRevision(`Compare ${name} with ${currentBranch}`, `${name}..HEAD`, 'range')}
+              onCompareBranch={(name) => void openRevision(t('app.compareRange', { name, current: currentBranch }), `${name}..HEAD`, 'range')}
               onCreateBranch={(hash) => {
-                const name = prompt('从该提交创建并检出分支：', 'feature/');
-                if (name) void run('已创建分支', () => createBranch(activeRepo.path, name, hash));
+                const name = prompt(t('toast.branchPrompt'), 'feature/');
+                if (name) void run(t('toast.branchCreated'), () => createBranch(activeRepo.path, name, hash));
               }}
             />
           )}
@@ -784,11 +790,11 @@ export function App() {
                 const body = head.body?.trim();
                 return body ? `${head.subject}\n\n${body}` : head.subject;
               })()}
-              onCommit={(msg, amend, andPush) => void run(andPush ? '已提交并推送' : '已提交', () =>
+              onCommit={(msg, amend, andPush) => void run(andPush ? t('toast.committedAndPushed') : t('toast.committed'), () =>
                 commitChanges(activeRepo.path, msg, amend, andPush)
               )}
-              onAddToGitignore={(path) => void run('已加入 .gitignore', () => appendGitignore(activeRepo.path, path))}
-              onDeleteUnversioned={(file) => void run('已删除文件', () => deleteUnversioned(activeRepo.path, file.path))}
+              onAddToGitignore={(path) => void run(t('toast.gitignore'), () => appendGitignore(activeRepo.path, path))}
+              onDeleteUnversioned={(file) => void run(t('toast.fileDeleted'), () => deleteUnversioned(activeRepo.path, file.path))}
               onShelve={openShelve}
               onToggleFileStage={handleToggleFile}
               onBatchToggleStage={handleBatch}
@@ -796,8 +802,8 @@ export function App() {
               onToggleChunkStage={handleChunk}
               onRevertChunk={handleRevertChunk}
               onRollbackFile={(file) => {
-                if (confirm(`回滚 ${file.path} 到 HEAD？`)) {
-                  void run('已回滚文件', () => discardPaths(activeRepo.path, [file.path]));
+                if (confirm(t('toast.rollbackFileConfirm', { path: file.path }))) {
+                  void run(t('toast.fileRolledBack'), () => discardPaths(activeRepo.path, [file.path]));
                 }
               }}
               onRefresh={() => void refresh()}
@@ -805,7 +811,7 @@ export function App() {
               onCreatePatch={() => {
                 if (!activeRepo) return;
                 const paths = changes.filter(file => file.isStaged).map(file => file.path);
-                void run('补丁', () => createPatch(activeRepo.path, paths.length ? paths : changes.map(file => file.path)));
+                void run(t('toast.patch'), () => createPatch(activeRepo.path, paths.length ? paths : changes.map(file => file.path)));
               }}
               repoKey={activeRepo.id}
               ignoreWhitespace={ignoreWhitespace}
@@ -829,17 +835,17 @@ export function App() {
               onClose={() => undefined}
               branches={branches}
               currentBranch={currentBranch}
-              onSelectBranch={(name) => void run(`已检出 ${name}`, () => checkoutBranch(activeRepo.path, name))}
-              onCreateBranch={(name) => void run('已创建分支', () => createBranch(activeRepo.path, name))}
-              onMerge={(name) => void run('合并完成', () => mergeBranch(activeRepo.path, name))}
-              onRebase={(name) => void run('变基完成', () => rebaseOnto(activeRepo.path, name))}
-              onCompare={(name) => void openRevision(`Compare ${name} with ${currentBranch}`, `${name}..HEAD`, 'range')}
+              onSelectBranch={(name) => void run(t('toast.checkedOut', { name }), () => checkoutBranch(activeRepo.path, name))}
+              onCreateBranch={(name) => void run(t('toast.branchCreated'), () => createBranch(activeRepo.path, name))}
+              onMerge={(name) => void run(t('toast.merged'), () => mergeBranch(activeRepo.path, name))}
+              onRebase={(name) => void run(t('toast.rebased'), () => rebaseOnto(activeRepo.path, name))}
+              onCompare={(name) => void openRevision(t('app.compareRange', { name, current: currentBranch }), `${name}..HEAD`, 'range')}
               onDelete={(branch, force) => { void handleDeleteBranch(branch, force); }}
               onRename={(branch) => {
-                const name = prompt('新的分支名：', branch.name);
-                if (name && name !== branch.name) void run('已重命名', () => renameBranch(activeRepo.path, branch.name, name));
+                const name = prompt(t('toast.renamePrompt'), branch.name);
+                if (name && name !== branch.name) void run(t('toast.renamed'), () => renameBranch(activeRepo.path, branch.name, name));
               }}
-              onToggleFavorite={(branch) => void run(branch.isFavorite ? '已取消收藏' : '已收藏分支', async () => {
+              onToggleFavorite={(branch) => void run(branch.isFavorite ? t('toast.unfavorited') : t('toast.favorited'), async () => {
                 await toggleFavoriteBranch(activeRepo.path, branch.name);
                 return branch.name;
               })}
@@ -851,27 +857,27 @@ export function App() {
             <ShelfStashView
               shelves={shelves}
               stashes={stashes}
-              onUnshelve={(id) => void run('已恢复架藏', () => unshelve(activeRepo.path, id))}
-              onDeleteShelf={(id) => void run('已删除架藏', () => deleteShelf(activeRepo.path, id))}
-              onApplyStash={(stash: StashItem) => void run('已应用贮藏', () => stashApply(activeRepo.path, stash.index, false))}
-              onPopStash={(stash) => void run('已弹出贮藏', () => stashApply(activeRepo.path, stash.index, true))}
-              onDropStash={(stash) => void run('已丢弃贮藏', () => stashDrop(activeRepo.path, stash.index))}
+              onUnshelve={(id) => void run(t('toast.unshelved'), () => unshelve(activeRepo.path, id))}
+              onDeleteShelf={(id) => void run(t('toast.shelfDeleted'), () => deleteShelf(activeRepo.path, id))}
+              onApplyStash={(stash: StashItem) => void run(t('toast.stashApplied'), () => stashApply(activeRepo.path, stash.index, false))}
+              onPopStash={(stash) => void run(t('toast.stashPopped'), () => stashApply(activeRepo.path, stash.index, true))}
+              onDropStash={(stash) => void run(t('toast.stashDropped'), () => stashDrop(activeRepo.path, stash.index))}
               onCreateStash={() => {
-                const message = prompt('贮藏说明：', '') || 'EasyGit stash';
-                void run('已贮藏', () => stashSave(activeRepo.path, message));
+                const message = prompt(t('toast.stashPrompt'), '') || 'EasyGit stash';
+                void run(t('toast.stashed'), () => stashSave(activeRepo.path, message));
               }}
               onShowShelfDiff={(id) => {
                 if (!isTauriEnvironment()) {
-                  showToast('浏览器预览没有架藏差异', true);
+                  showToast(t('toast.previewNoShelfDiff'), true);
                   return;
                 }
                 void shelfPatchFiles(activeRepo.path, id).then(files => {
-                  openDiff(`Shelf ${id}`, files, async (path) => files.find(file => file.path === path)?.chunks || []);
+                  openDiff(t('app.shelfDiff', { id }), files, async (path) => files.find(file => file.path === path)?.chunks || []);
                 }).catch(err => showToast(String(err), true));
               }}
               onShowStashDiff={(stash) => {
                 if (!isTauriEnvironment()) {
-                  showToast('浏览器预览没有贮藏差异', true);
+                  showToast(t('toast.previewNoStashDiff'), true);
                   return;
                 }
                 void stashPatchFiles(activeRepo.path, stash.index).then(files => {
@@ -899,7 +905,7 @@ export function App() {
                 if (!conflictPath) return;
                 const next = changes.find(file => file.status === 'conflict' && file.path !== conflictPath)?.path ?? '';
                 void (async () => {
-                  const ok = await run('冲突已解决', () => resolveConflict(activeRepo.path, conflictPath, content));
+                  const ok = await run(t('toast.conflictResolved'), () => resolveConflict(activeRepo.path, conflictPath, content));
                   if (!ok) return;
                   if (next) await loadConflictFile(next);
                   else {
@@ -916,7 +922,7 @@ export function App() {
           )}
 
           {loading && (
-            <div className="absolute top-2 right-3 text-[11px] text-jb-text-muted">正在读取 Git…</div>
+            <div className="absolute top-2 right-3 text-[11px] text-jb-text-muted">{t('toast.loadingGit')}</div>
           )}
         </main>
 
@@ -928,6 +934,7 @@ export function App() {
           aheadCount={aheadCount}
           behindCount={behindCount}
           gitVersion={gitVersion}
+          connected={native}
           memoryMb={memoryMb}
           encoding={fileEncoding}
           lineEnding={lineEnding}
@@ -939,21 +946,21 @@ export function App() {
         branches={branches}
         currentBranch={currentBranch}
         onSelectBranch={(name) => {
-          void run(`已检出 ${name}`, () => checkoutBranch(activeRepo.path, name));
+          void run(t('toast.checkedOut', { name }), () => checkoutBranch(activeRepo.path, name));
         }}
-        onCreateBranch={(name) => void run('已创建分支', () => createBranch(activeRepo.path, name))}
-        onMerge={(name) => void run('合并完成', () => mergeBranch(activeRepo.path, name))}
-        onRebase={(name) => void run('变基完成', () => rebaseOnto(activeRepo.path, name))}
+        onCreateBranch={(name) => void run(t('toast.branchCreated'), () => createBranch(activeRepo.path, name))}
+        onMerge={(name) => void run(t('toast.merged'), () => mergeBranch(activeRepo.path, name))}
+        onRebase={(name) => void run(t('toast.rebased'), () => rebaseOnto(activeRepo.path, name))}
         onCompare={(name) => {
           setIsBranchesOpen(false);
-          void openRevision(`Compare ${name} with ${currentBranch}`, `${name}..HEAD`, 'range');
+          void openRevision(t('app.compareRange', { name, current: currentBranch }), `${name}..HEAD`, 'range');
         }}
         onDelete={(branch, force) => { void handleDeleteBranch(branch, force); }}
         onRename={(branch) => {
-          const name = prompt('新的分支名：', branch.name);
-          if (name && name !== branch.name) void run('已重命名', () => renameBranch(activeRepo.path, branch.name, name));
+          const name = prompt(t('toast.renamePrompt'), branch.name);
+          if (name && name !== branch.name) void run(t('toast.renamed'), () => renameBranch(activeRepo.path, branch.name, name));
         }}
-        onToggleFavorite={(branch) => void run(branch.isFavorite ? '已取消收藏' : '已收藏分支', async () => {
+        onToggleFavorite={(branch) => void run(branch.isFavorite ? t('toast.unfavorited') : t('toast.favorited'), async () => {
           await toggleFavoriteBranch(activeRepo.path, branch.name);
           return branch.name;
         })}
@@ -970,8 +977,8 @@ export function App() {
         open={shelveDraft !== null}
         fileCount={shelveDraft?.count ?? 0}
         hint={shelveDraft?.includesUnstaged
-          ? `没有已暂存文件，将架藏全部 ${shelveDraft.count} 个更改，并移出工作区。`
-          : `将把已暂存的 ${shelveDraft?.count ?? 0} 个文件移入架藏，工作区对应改动会被移走。`}
+          ? t('app.shelveAll', { count: shelveDraft.count })
+          : t('app.shelveStaged', { count: shelveDraft?.count ?? 0 })}
         onCancel={() => setShelveDraft(null)}
         onConfirm={confirmShelve}
       />
@@ -996,11 +1003,11 @@ export function App() {
 
       <ConfirmDialog
         open={Boolean(pendingConfirm)}
-        title={pendingConfirm?.kind === 'push' ? '推送需要确认' : '更新需要确认'}
+        title={pendingConfirm?.kind === 'push' ? t('confirm.pushTitle') : t('confirm.updateTitle')}
         message={pendingConfirm?.outcome.message || ''}
         files={pendingConfirm?.outcome.conflictingPaths}
-        filesHint={pendingConfirm?.kind === 'push' ? '以下文件将写入上游配置' : undefined}
-        actions={confirmActions(pendingConfirm)}
+        filesHint={pendingConfirm?.kind === 'push' ? t('confirm.pushFiles') : undefined}
+        actions={confirmActions(pendingConfirm, t)}
         onChoose={chooseConfirm}
         onCancel={cancelConfirm}
       />

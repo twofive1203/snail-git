@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { FileChange } from '../../types/git';
 import { SplitPane } from '../common/SplitPane';
+import { useI18n } from '../../i18n/react';
 import { ChangelistTree } from './ChangelistTree';
 import { SideBySideDiff } from './SideBySideDiff';
 import { CommitActionBox } from './CommitActionBox';
@@ -50,6 +51,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
   onResolveConflict,
   onSelectedFileChange,
 }) => {
+  const { t } = useI18n();
   const [selectedFileId, setSelectedFileId] = useState<string>(
     changes.length > 0 ? changes[0].id : ''
   );
@@ -121,8 +123,8 @@ export const CommitView: React.FC<CommitViewProps> = ({
         <div className="flex-1 h-full min-h-0 flex flex-col overflow-hidden">
         {selectedFile?.status === 'conflict' && (
           <div className="h-8 px-3 border-b border-jb-border bg-rose-950/30 flex items-center justify-between text-xs">
-            <span className="text-rose-200">这个文件有冲突，普通 diff 无法安全合并。</span>
-            <button onClick={() => onResolveConflict?.(selectedFile)} className="px-2 py-1 rounded bg-purple-500/30 text-purple-100">打开三方合并</button>
+            <span className="text-rose-200">{t('commit.conflict')}</span>
+            <button onClick={() => onResolveConflict?.(selectedFile)} className="px-2 py-1 rounded bg-purple-500/30 text-purple-100">{t('commit.openMerge')}</button>
           </div>
         )}
         <SideBySideDiff

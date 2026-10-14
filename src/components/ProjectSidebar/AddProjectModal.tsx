@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { FolderGit2, X, Plus, FolderOpen, Sparkles } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 interface AddProjectModalProps {
   isOpen: boolean;
@@ -14,6 +15,7 @@ export const AddProjectModal: React.FC<AddProjectModalProps> = ({
   onAdd,
   onBrowse,
 }) => {
+  const { t } = useI18n();
   const [repoPath, setRepoPath] = useState('');
   const [repoName, setRepoName] = useState('');
 
@@ -55,7 +57,7 @@ export const AddProjectModal: React.FC<AddProjectModalProps> = ({
         <div className="h-10 px-4 border-b border-[#393B40] flex items-center justify-between bg-[#2B2D30]">
           <div className="flex items-center space-x-2">
             <FolderGit2 className="w-4 h-4 text-[#3574F0]" />
-            <span className="font-semibold text-sm text-[#DFE1E5]">添加已有的 Git 项目</span>
+            <span className="font-semibold text-sm text-[#DFE1E5]">{t('project.title')}</span>
           </div>
           <button 
             onClick={onClose}
@@ -69,7 +71,7 @@ export const AddProjectModal: React.FC<AddProjectModalProps> = ({
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-[#DFE1E5]">
-              项目本地路径 (Directory Path) <span className="text-rose-400">*</span>
+              {t('project.path')} <span className="text-rose-400">*</span>
             </label>
             <div className="flex items-center space-x-1.5">
               <input
@@ -77,7 +79,7 @@ export const AddProjectModal: React.FC<AddProjectModalProps> = ({
                 autoFocus
                 value={repoPath}
                 onChange={(e) => handlePathChange(e.target.value)}
-                placeholder="例如: D:/workspace/my-new-project"
+                placeholder={t('project.pathPlaceholder')}
                 className="flex-1 bg-[#1E1F22] border border-[#393B40] rounded px-3 py-1.5 text-xs text-[#DFE1E5] placeholder-[#6F737A] focus:outline-none focus:border-[#3574F0] font-mono"
               />
               <button
@@ -89,23 +91,23 @@ export const AddProjectModal: React.FC<AddProjectModalProps> = ({
                   });
                 }}
                 className="px-2 py-1.5 bg-[#1E1F22] hover:bg-[#35373C] border border-[#393B40] rounded text-[#9DA0A8] hover:text-[#DFE1E5] flex items-center space-x-1"
-                title="选择本地目录"
+                title={t('project.browseTitle')}
               >
                 <FolderOpen className="w-3.5 h-3.5" />
-                <span>浏览</span>
+                <span>{t('project.browse')}</span>
               </button>
             </div>
           </div>
 
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-[#DFE1E5]">
-              项目别名 (Display Name)
+              {t('project.alias')}
             </label>
             <input
               type="text"
               value={repoName}
               onChange={(e) => setRepoName(e.target.value)}
-              placeholder="未填写时自动使用目录名"
+              placeholder={t('project.aliasPlaceholder')}
               className="w-full bg-[#1E1F22] border border-[#393B40] rounded px-3 py-1.5 text-xs text-[#DFE1E5] placeholder-[#6F737A] focus:outline-none focus:border-[#3574F0]"
             />
           </div>
@@ -114,7 +116,7 @@ export const AddProjectModal: React.FC<AddProjectModalProps> = ({
           <div className="pt-1">
             <span className="text-[11px] text-[#8C9099] flex items-center space-x-1 mb-1.5">
               <Sparkles className="w-3 h-3 text-[#3574F0]" />
-              <span>快速体验示例项目：</span>
+              <span>{t('project.samples')}</span>
             </span>
             <div className="flex flex-wrap gap-1.5">
               {sampleQuickPaths.map(s => (
@@ -140,7 +142,7 @@ export const AddProjectModal: React.FC<AddProjectModalProps> = ({
               onClick={onClose}
               className="px-3 py-1.5 rounded hover:bg-[#35373C] text-[#DFE1E5] text-xs font-medium"
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               type="submit"
@@ -148,7 +150,7 @@ export const AddProjectModal: React.FC<AddProjectModalProps> = ({
               className="px-4 py-1.5 rounded bg-[#3574F0] hover:bg-[#4682F7] disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium flex items-center space-x-1.5 shadow-sm"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>添加并打开项目</span>
+              <span>{t('project.addOpen')}</span>
             </button>
           </div>
         </form>

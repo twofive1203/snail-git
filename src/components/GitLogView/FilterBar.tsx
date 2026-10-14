@@ -1,5 +1,6 @@
 import React from 'react';
 import { Search, GitBranch, User, Calendar, FolderTree, RotateCcw, X, Star } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 interface FilterBarProps {
   searchQuery: string;
@@ -32,6 +33,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   authors,
   currentUser = '',
 }) => {
+  const { t } = useI18n();
   const meActive = Boolean(currentUser) && selectedAuthor === currentUser;
   const headActive = selectedBranch === 'Head';
   const authorOptions = currentUser && !authors.includes(currentUser) ? [currentUser, ...authors] : authors;
@@ -53,7 +55,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           type="button"
           disabled={!currentUser}
           onClick={() => onAuthorChange(meActive ? 'All' : currentUser)}
-          title={currentUser ? `仅看我的：${currentUser}` : '未读取到 git config user.name'}
+          title={currentUser ? t('filter.mineTitle', { user: currentUser }) : t('filter.mineMissing')}
           className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 transition-colors ${
             meActive
               ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
@@ -61,13 +63,13 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           }`}
         >
           <Star className={`w-3 h-3 shrink-0 ${meActive ? 'fill-amber-400 text-amber-400' : 'text-amber-400'}`} />
-          <span>仅看我的</span>
+          <span>{t('filter.mine')}</span>
         </button>
 
         <button
           type="button"
           onClick={() => onBranchChange(headActive ? 'All' : 'Head')}
-          title="当前分支：只看从 HEAD 可达的提交历史"
+          title={t('filter.headTitle')}
           className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 transition-colors ${
             headActive
               ? 'bg-[#3574F0]/20 border-[#3574F0] text-blue-300'
@@ -75,7 +77,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           }`}
         >
           <GitBranch className="w-3 h-3 text-[#3574F0] shrink-0" />
-          <span>当前分支</span>
+          <span>{t('filter.head')}</span>
         </button>
 
         {/* 分支筛选胶囊 */}
@@ -85,14 +87,14 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
         }`}>
           <GitBranch className="w-3 h-3 text-[#3574F0] shrink-0" />
-          <span className="text-[#8C9099]">Branch:</span>
+          <span className="text-[#8C9099]">{t('filter.branch')}</span>
           <select 
             value={selectedBranch}
             onChange={(e) => onBranchChange(e.target.value)}
             className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
-            <option value="All" className="bg-[#2B2D30]">All Branches</option>
-            <option value="Head" className="bg-[#2B2D30]">HEAD (Current)</option>
+            <option value="All" className="bg-[#2B2D30]">{t('filter.allBranches')}</option>
+            <option value="Head" className="bg-[#2B2D30]">{t('filter.headOption')}</option>
             {branches.map(b => (
               <option key={b} value={b} className="bg-[#2B2D30]">{b}</option>
             ))}
@@ -106,13 +108,13 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
         }`}>
           <User className="w-3 h-3 text-emerald-400 shrink-0" />
-          <span className="text-[#8C9099]">User:</span>
+          <span className="text-[#8C9099]">{t('filter.user')}</span>
           <select 
             value={selectedAuthor}
             onChange={(e) => onAuthorChange(e.target.value)}
             className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
-            <option value="All" className="bg-[#2B2D30]">All Users</option>
+            <option value="All" className="bg-[#2B2D30]">{t('filter.allUsers')}</option>
             {authorOptions.map(a => (
               <option key={a} value={a} className="bg-[#2B2D30]">{a}</option>
             ))}
@@ -126,16 +128,16 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
         }`}>
           <Calendar className="w-3 h-3 text-purple-400 shrink-0" />
-          <span className="text-[#8C9099]">Date:</span>
+          <span className="text-[#8C9099]">{t('filter.date')}</span>
           <select
             value={selectedDate}
             onChange={(e) => onDateChange(e.target.value)}
             className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
-            <option value="All" className="bg-[#2B2D30]">All</option>
-            <option value="Today" className="bg-[#2B2D30]">Today</option>
-            <option value="Last 7 Days" className="bg-[#2B2D30]">Last 7 Days</option>
-            <option value="Last 30 Days" className="bg-[#2B2D30]">Last 30 Days</option>
+            <option value="All" className="bg-[#2B2D30]">{t('filter.all')}</option>
+            <option value="Today" className="bg-[#2B2D30]">{t('filter.today')}</option>
+            <option value="Last 7 Days" className="bg-[#2B2D30]">{t('filter.last7')}</option>
+            <option value="Last 30 Days" className="bg-[#2B2D30]">{t('filter.last30')}</option>
           </select>
         </div>
 
@@ -146,11 +148,11 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
         }`}>
           <FolderTree className="w-3 h-3 text-amber-400 shrink-0" />
-          <span className="text-[#8C9099]">Paths:</span>
+          <span className="text-[#8C9099]">{t('filter.paths')}</span>
           <input
             value={pathQuery}
             onChange={(e) => onPathChange(e.target.value)}
-            placeholder="All"
+            placeholder={t('filter.all')}
             className="w-20 bg-transparent border-none text-[11px] focus:outline-none text-[#DFE1E5] placeholder-[#6F737A]"
           />
         </div>
@@ -160,10 +162,10 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           <button
             onClick={handleResetFilters}
             className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#2B2D30] transition-colors"
-            title="重置所有筛选条件"
+            title={t('filter.resetTitle')}
           >
             <RotateCcw className="w-2.5 h-2.5" />
-            <span>Reset</span>
+            <span>{t('filter.reset')}</span>
           </button>
         )}
       </div>
@@ -175,7 +177,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           type="text"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="搜索提交说明、哈希、作者..."
+          placeholder={t('filter.search')}
           className="w-full bg-[#2B2D30] border border-[#393B40] rounded pl-7 pr-6 py-0.5 text-xs text-[#DFE1E5] placeholder-[#6F737A] focus:outline-none focus:border-[#3574F0] transition-colors h-6"
         />
         {searchQuery && (

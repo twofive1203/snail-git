@@ -1,5 +1,6 @@
 import React from 'react';
 import { GitBranch, HardDrive, CheckCircle2, Zap } from 'lucide-react';
+import { useI18n } from '../i18n/react';
 
 interface StatusBarProps {
   currentBranch: string;
@@ -9,6 +10,7 @@ interface StatusBarProps {
   aheadCount?: number;
   behindCount?: number;
   gitVersion?: string;
+  connected?: boolean;
   memoryMb?: number;
   encoding?: string;
   lineEnding?: string;
@@ -22,10 +24,16 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   aheadCount = 0,
   behindCount = 0,
   gitVersion = 'Git',
+  connected = true,
   memoryMb,
   encoding = '—',
   lineEnding = '—',
 }) => {
+  const { t } = useI18n();
+  const treeStatus = dirtyFilesCount === 0
+    ? t('status.clean')
+    : t('status.changed', { dirty: dirtyFilesCount, staged: stagedFilesCount });
+  const versionLabel = connected ? gitVersion.replace('git version ', 'Git ') : t('status.notConnected');
   return (
     <footer className="h-6 bg-[#18191B] border-t border-[#303236] flex items-center justify-between px-3 text-[11px] text-[#8C9099] select-none font-sans shrink-0">
       {/* 左侧 */}
@@ -44,7 +52,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
         <div className="flex items-center space-x-1">
           <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-          <span>{dirtyFilesCount === 0 ? 'Working tree clean' : `${dirtyFilesCount} changed · ${stagedFilesCount} staged`}</span>
+          <span>{treeStatus}</span>
         </div>
       </div>
 
@@ -59,7 +67,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
         <span>{encoding}</span>
         <span>{lineEnding}</span>
-        <span className="text-[#6F737A]">{gitVersion.replace('git version ', 'Git ')}</span>
+        <span className="text-[#6F737A]">{versionLabel}</span>
       </div>
     </footer>
   );

@@ -10,6 +10,7 @@ import {
   Code2, 
   Undo2,
 } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 interface SideBySideDiffProps {
   file: FileChange | null;
@@ -124,6 +125,7 @@ function GutterLine({
   onStage: () => void;
   onRevert: () => void;
 }) {
+  const { t } = useI18n();
   const isAdd = row.line.type === 'added';
   const isDel = row.line.type === 'deleted';
   const isMod = row.line.type === 'modified';
@@ -140,14 +142,19 @@ function GutterLine({
         <div className="absolute left-1/2 top-0.5 z-20 -translate-x-1/2 flex flex-col gap-0.5">
           <button
             onClick={onStage}
-            title={`${row.isStaged ? '取消暂存此块' : '应用此块暂存'}（@@ -${row.oldStart},${row.oldLines} +${row.newStart},${row.newLines}）`}
+            title={t(row.isStaged ? 'diff.unstageChunk' : 'diff.stageChunk', {
+              oldStart: row.oldStart,
+              oldLines: row.oldLines,
+              newStart: row.newStart,
+              newLines: row.newLines,
+            })}
             className="w-5 h-5 rounded border border-jb-blue/40 bg-jb-panel/95 text-jb-blue hover:bg-jb-blue/20 flex items-center justify-center shadow-sm"
           >
             <ChevronsRight className="w-3 h-3" />
           </button>
           <button
             onClick={onRevert}
-            title="回滚丢弃此块变更"
+            title={t('diff.revertChunk')}
             className="w-5 h-5 rounded border border-rose-500/40 bg-jb-panel/95 text-rose-300 hover:bg-rose-500/20 flex items-center justify-center shadow-sm"
           >
             <Undo2 className="w-3 h-3" />
@@ -171,10 +178,12 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   onToggleChunkStage,
   onRevertChunk,
   readOnly = false,
-  baselineLabel = 'HEAD vs Working Tree',
+  baselineLabel,
   ignoreWhitespace: ignoreWhitespaceProp,
   onIgnoreWhitespaceChange,
 }) => {
+  const { t } = useI18n();
+  const baseline = baselineLabel ?? t('diff.baseline');
   const [isUnified, setIsUnified] = useState(false);
   const [ignoreWhitespaceLocal, setIgnoreWhitespaceLocal] = useState(false);
   const ignoreWhitespace = ignoreWhitespaceProp ?? ignoreWhitespaceLocal;
@@ -282,7 +291,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   if (!file) {
     return (
       <div className="flex-1 flex items-center justify-center bg-jb-bg text-jb-text-muted text-xs">
-        Select a file to inspect diff
+        {t('diff.selectFile')}
       </div>
     );
   }
@@ -296,7 +305,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
           <Code2 className="w-4 h-4 text-jb-blue shrink-0" />
           <FilePathDisplay path={file.path} className="flex-1 min-w-0" />
           <span className="text-[11px] text-jb-text-muted font-sans hidden md:inline">
-            ({baselineLabel})
+            ({baseline})
           </span>
         </div>
 
@@ -307,7 +316,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
             <button
               onClick={() => setCurrentChunkIndex(Math.max(0, currentChunkIndex - 1))}
               disabled={currentChunkIndex <= 0}
-              title="Previous Difference (Shift+F7)"
+              title={t('diff.prev')}
               className="p-1 rounded hover:bg-jb-hover disabled:opacity-30 text-jb-text-secondary hover:text-jb-text-primary"
             >
               <ChevronUp className="w-3.5 h-3.5" />
@@ -318,7 +327,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
             <button
               onClick={() => setCurrentChunkIndex(Math.min(chunks.length - 1, currentChunkIndex + 1))}
               disabled={currentChunkIndex >= chunks.length - 1}
-              title="Next Difference (F7)"
+              title={t('diff.next')}
               className="p-1 rounded hover:bg-jb-hover disabled:opacity-30 text-jb-text-secondary hover:text-jb-text-primary"
             >
               <ChevronDown className="w-3.5 h-3.5" />
@@ -339,9 +348,9 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
                 ? 'bg-jb-blue/20 text-jb-blue border-jb-blue/40 font-medium' 
                 : 'bg-jb-bg text-jb-text-secondary border-jb-border hover:bg-jb-hover'
             }`}
-            title="Ignore Whitespace - 忽略缩进与换行符变动"
+            title={t('diff.ignoreWhitespaceTitle')}
           >
-            Ignore Whitespace
+            {t('diff.ignoreWhitespace')}
           </button>
 
           {/* 双栏 vs 单栏切换 */}
@@ -349,14 +358,14 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
             <button
               onClick={() => setIsUnified(false)}
               className={`p-1 rounded ${!isUnified ? 'bg-jb-selected text-white' : 'text-jb-text-muted hover:text-jb-text-primary'}`}
-              title="Side-by-Side Viewer (双栏视图)"
+              title={t('diff.sideBySide')}
             >
               <Columns className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => setIsUnified(true)}
               className={`p-1 rounded ${isUnified ? 'bg-jb-selected text-white' : 'text-jb-text-muted hover:text-jb-text-primary'}`}
-              title="Unified Viewer (单栏合并视图)"
+              title={t('diff.unified')}
             >
               <AlignJustify className="w-3.5 h-3.5" />
             </button>
@@ -372,12 +381,12 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
               <Code2 className="w-5 h-5" />
             </div>
             <div className="text-sm font-medium text-jb-text-primary">
-              {file.status === 'untracked' ? '未进行版本管理的新文件 (Untracked File)' : '全新文件或二进制文件'}
+              {file.status === 'untracked' ? t('diff.untracked') : t('diff.binaryOrNew')}
             </div>
             <div className="text-xs text-jb-text-muted max-w-md font-sans leading-relaxed">
               {file.chunksLoaded === false
-                ? '正在读取差异…'
-                : '勾选该文件前面的复选框后，EasyGit 将执行 git add 并纳入本次提交。'}
+                ? t('diff.loading')
+                : t('diff.stageHint')}
             </div>
             <div className="pt-2">
               <span className={`px-2.5 py-1 rounded text-xs font-mono font-medium border ${
@@ -385,7 +394,7 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
                   ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm' 
                   : 'bg-jb-panel text-jb-text-muted border-jb-border'
               }`}>
-                {file.isStaged ? '✓ 已加入本次提交队列 (Staged)' : '○ 未勾选 (本次不会提交)'}
+                {file.isStaged ? t('diff.staged') : t('diff.unstaged')}
               </span>
             </div>
           </div>
@@ -406,14 +415,19 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
                   <div className="absolute top-0.5 left-20 z-20 flex flex-col gap-0.5 opacity-0 pointer-events-none group-hover/chunk:opacity-100 group-hover/chunk:pointer-events-auto">
                     <button
                       onClick={() => onToggleChunkStage(chunk.id)}
-                      title={`${chunk.isStaged ? '取消暂存此块' : '应用此块暂存'}（@@ -${chunk.oldStart},${chunk.oldLines} +${chunk.newStart},${chunk.newLines}）`}
+                      title={t(chunk.isStaged ? 'diff.unstageChunk' : 'diff.stageChunk', {
+                        oldStart: chunk.oldStart,
+                        oldLines: chunk.oldLines,
+                        newStart: chunk.newStart,
+                        newLines: chunk.newLines,
+                      })}
                       className="w-5 h-5 rounded border border-jb-blue/40 bg-jb-panel/95 text-jb-blue hover:bg-jb-blue/20 flex items-center justify-center shadow-sm"
                     >
                       <ChevronsRight className="w-3 h-3" />
                     </button>
                     <button
                       onClick={() => onRevertChunk(chunk.id)}
-                      title="回滚丢弃此块变更"
+                      title={t('diff.revertChunk')}
                       className="w-5 h-5 rounded border border-rose-500/40 bg-jb-panel/95 text-rose-300 hover:bg-rose-500/20 flex items-center justify-center shadow-sm"
                     >
                       <Undo2 className="w-3 h-3" />

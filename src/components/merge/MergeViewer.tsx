@@ -37,6 +37,8 @@ import {
   type SideState,
   type WordSpan,
 } from './threeWayMerge';
+import { t as translate } from '../../i18n';
+import { useI18n } from '../../i18n/react';
 
 export interface MergeViewerHandle {
   save: () => void;
@@ -99,13 +101,20 @@ function wordClass(tone: Tone): string {
 }
 
 function sourceLabel(source: ResultSource, chunk: MergeChunk): string {
-  if (source === 'manual') return '已手动编辑';
-  if (source === 'simple') return '已简单合并';
-  if (source === 'both') return '两边都保留，请检查顺序';
-  if (source === 'left') return chunk.kind === 'right' ? '保留基准' : '已采用左侧';
-  if (source === 'right') return '已采用右侧';
-  if (source === 'base' && chunk.kind !== 'context') return chunk.kind === 'conflict' ? '未处理，结果仍是基准' : '已忽略，保留基准';
+  if (source === 'manual') return translate('merge.edited');
+  if (source === 'simple') return translate('merge.simpleMerged');
+  if (source === 'both') return translate('merge.bothKept');
+  if (source === 'left') return chunk.kind === 'right' ? translate('merge.keptBase') : translate('merge.tookLeft');
+  if (source === 'right') return translate('merge.tookRight');
+  if (source === 'base' && chunk.kind !== 'context') return chunk.kind === 'conflict' ? translate('merge.stillBase') : translate('merge.ignoredBase');
   return '';
+}
+
+function sessionNote(session: MergeSession): string {
+  if (session.mode === 'binary') return translate('merge.note.binary');
+  if (session.mode === 'raw') return translate('merge.note.raw');
+  if (session.mode === 'too-large') return translate('merge.note.tooLarge');
+  return session.note ?? '';
 }
 
 function LineCell({ cell, onDoubleClick }: { cell: Cell; onDoubleClick?: () => void }) {
@@ -228,7 +237,7 @@ function resultCells(chunk: MergeChunk, lines: string[], source: ResultSource, r
   if (lines.length === 0 && chunk.kind !== 'context') {
     return [{
       key: 'result-empty',
-      text: source === 'base' ? '基准中此处没有内容' : '已删除',
+      text: source === 'base' ? translate('merge.baseEmpty') : translate('merge.deleted'),
       lineNo: null,
       tone: 'deleted',
       words: null,
@@ -287,6 +296,7 @@ const ChunkView = React.memo(function ChunkView({
   onEdit: (id: string | null) => void;
   onChange: (id: string, recipe: (chunk: MergeChunk) => MergeChunk) => void;
 }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState('');
   const result = chunkResult(chunk);
   const unresolved = isUnresolved(chunk);
@@ -328,7 +338,7 @@ const ChunkView = React.memo(function ChunkView({
             onClick={() => onToggleExpand(chunk.id)}
             className="w-full py-0.5 text-[11px] text-[#6F737A] hover:text-[#DFE1E5] hover:bg-[#35373C] border-y border-[#393B40]/70"
           >
-            展开其余 {lines.length - 4} 行未改动
+            {t('merge.expandRest', { count: lines.length - 4 })}
           </button>
         )}
         {renderSlice(tail, lines.length - tail.length)}
@@ -338,7 +348,7 @@ const ChunkView = React.memo(function ChunkView({
             onClick={() => onToggleExpand(chunk.id)}
             className="w-full py-0.5 text-[11px] text-[#6F737A] hover:text-[#DFE1E5]"
           >
-            折叠未改动
+            {t('merge.foldRest')}
           </button>
         )}
       </div>
@@ -379,54 +389,54 @@ const ChunkView = React.memo(function ChunkView({
     >
       <div className={`px-2 py-1 flex items-center gap-1.5 flex-wrap text-[11px] border-y ${bar}`}>
         <span className={`font-semibold ${chunk.kind === 'conflict' ? 'text-[#FFB4B8]' : 'text-[#DFE1E5]'}`}>
-          {chunk.kind === 'conflict' ? (unresolved ? '冲突' : '冲突已处理') : chunk.kind === 'same' ? '两边相同' : chunk.baseLines.length === 0 ? '新增' : (chunk.kind === 'left' ? chunk.leftLines : chunk.rightLines).length === 0 ? '删除' : '修改'}
+          {chunk.kind === 'conflict' ? (unresolved ? t('merge.conflict') : t('merge.conflictDone')) : chunk.kind === 'same' ? t('merge.same') : chunk.baseLines.length === 0 ? t('merge.added') : (chunk.kind === 'left' ? chunk.leftLines : chunk.rightLines).length === 0 ? t('merge.deleted') : t('merge.modified')}
         </span>
         <span className="text-[#6F737A]">
-          {chunk.kind === 'left' ? 'Your' : chunk.kind === 'right' ? 'Theirs' : 'Base'} {chunk.baseStart + 1}
+          {chunk.kind === 'left' ? t('merge.left') : chunk.kind === 'right' ? t('merge.right') : t('merge.base')} {chunk.baseStart + 1}
           {chunk.baseEnd > chunk.baseStart ? `–${chunk.baseEnd}` : ''}
         </span>
         <span className="text-[#C2C5CC]">{sourceLabel(result.source, chunk)}</span>
         <div className="ml-auto flex items-center gap-1">
           {chunk.kind === 'conflict' && (
             <>
-              <ActButton title="采用左侧并忽略右侧 (Alt+1)" onClick={() => onChange(chunk.id, current => resolveUsing(current, 'left'))} active={chunk.leftState === 'accepted' && chunk.rightState === 'ignored'}>
-                采用左侧
+              <ActButton title={t('merge.acceptLeftIgnoreRight')} onClick={() => onChange(chunk.id, current => resolveUsing(current, 'left'))} active={chunk.leftState === 'accepted' && chunk.rightState === 'ignored'}>
+                {t('merge.acceptLeft')}
               </ActButton>
-              <ActButton title="采用右侧并忽略左侧 (Alt+2)" onClick={() => onChange(chunk.id, current => resolveUsing(current, 'right'))} active={chunk.rightState === 'accepted' && chunk.leftState === 'ignored'} accent="bg-[#59A869]/20 text-[#B7E0C0] border-[#59A869]/40">
-                采用右侧
+              <ActButton title={t('merge.acceptRightIgnoreLeft')} onClick={() => onChange(chunk.id, current => resolveUsing(current, 'right'))} active={chunk.rightState === 'accepted' && chunk.leftState === 'ignored'} accent="bg-[#59A869]/20 text-[#B7E0C0] border-[#59A869]/40">
+                {t('merge.acceptRight')}
               </ActButton>
-              <ActButton title="两边都放进结果，之后可以再编辑 (Alt+3)" onClick={() => onChange(chunk.id, current => acceptBoth(current, false))} active={chunk.leftState === 'accepted' && chunk.rightState === 'accepted' && !chunk.useSimple}>
-                两边都要
+              <ActButton title={t('merge.bothTitle')} onClick={() => onChange(chunk.id, current => acceptBoth(current, false))} active={chunk.leftState === 'accepted' && chunk.rightState === 'accepted' && !chunk.useSimple}>
+                {t('merge.both')}
               </ActButton>
               <ActButton
-                title="同一行两端互不重叠时，合并成一行"
+                title={t('merge.simpleTitle')}
                 disabled={!chunk.simple}
                 onClick={() => onChange(chunk.id, current => acceptBoth(current, true))}
                 active={chunk.useSimple}
                 accent="bg-purple-500/20 text-purple-200 border-purple-400/40"
               >
-                简单合并
+                {t('merge.simple')}
               </ActButton>
             </>
           )}
-          <ActButton title="这一块保留基准版本 (Alt+4)" onClick={() => onChange(chunk.id, keepBase)} active={result.source === 'base'}>
-            保留基准
+          <ActButton title={t('merge.keepBaseTitle')} onClick={() => onChange(chunk.id, keepBase)} active={result.source === 'base'}>
+            {t('merge.keptBase')}
           </ActButton>
-          <ActButton title="只编辑这一块的结果。双击中间栏也可以" onClick={() => onEdit(editing ? null : chunk.id)} active={editing}>
-            <span className="inline-flex items-center gap-1"><Pencil className="w-3 h-3" />编辑</span>
+          <ActButton title={t('merge.editChunkTitle')} onClick={() => onEdit(editing ? null : chunk.id)} active={editing}>
+            <span className="inline-flex items-center gap-1"><Pencil className="w-3 h-3" />{t('merge.edit')}</span>
           </ActButton>
           {chunk.manual && (
-            <ActButton title="放弃手动编辑，恢复到采用或忽略后的结果" onClick={() => onChange(chunk.id, clearManual)}>
-              撤销编辑
+            <ActButton title={t('merge.clearEditTitle')} onClick={() => onChange(chunk.id, clearManual)}>
+              {t('merge.undoEdit')}
             </ActButton>
           )}
         </div>
       </div>
       {showBase && chunk.baseLines.length > 0 && (
         <div className="px-3 py-1 bg-black/25 text-[11px] leading-5 text-[#9DA0A8] font-mono whitespace-pre border-b border-[#393B40]/60">
-          <div className="text-[10px] tracking-wide text-[#6F737A] mb-0.5">BASE</div>
+          <div className="text-[10px] tracking-wide text-[#6F737A] mb-0.5">{t('merge.base')}</div>
           {chunk.baseLines.slice(0, 6).map((line, index) => <div key={index}>{line || ' '}</div>)}
-          {chunk.baseLines.length > 6 && <div className="text-[#6F737A]">… 还有 {chunk.baseLines.length - 6} 行基准</div>}
+          {chunk.baseLines.length > 6 && <div className="text-[#6F737A]">{t('merge.moreBase', { count: chunk.baseLines.length - 6 })}</div>}
         </div>
       )}
       {editing && (
@@ -446,10 +456,10 @@ const ChunkView = React.memo(function ChunkView({
               }}
               className="px-2 py-1 rounded bg-[#3574F0] text-white text-[11px]"
             >
-              应用到结果
+              {t('merge.applyResult')}
             </button>
             <button type="button" onClick={() => onEdit(null)} className="px-2 py-1 rounded border border-[#393B40] text-[11px] text-[#C2C5CC]">
-              取消
+              {t('common.cancel')}
             </button>
           </div>
         </div>
@@ -471,10 +481,10 @@ const ChunkView = React.memo(function ChunkView({
         <div className="flex flex-col items-center gap-1 py-1 border-x border-[#393B40]/50 bg-[#26282B]" style={{ gridColumn: 2, gridRow: `1 / span ${visible}` }}>
           {leftChanged && chunk.kind !== 'same' && (
             <>
-              <GutterButton active={chunk.leftState === 'accepted'} tone="accept" title="采用左侧。再点一次撤销" onClick={() => clickSide('left', 'accepted')}>
+              <GutterButton active={chunk.leftState === 'accepted'} tone="accept" title={t('merge.acceptLeftAgain')} onClick={() => clickSide('left', 'accepted')}>
                 <ArrowRight className="w-3.5 h-3.5" />
               </GutterButton>
-              <GutterButton active={chunk.leftState === 'ignored'} tone="ignore" title="忽略左侧。再点一次撤销" onClick={() => clickSide('left', 'ignored')}>
+              <GutterButton active={chunk.leftState === 'ignored'} tone="ignore" title={t('merge.ignoreLeftAgain')} onClick={() => clickSide('left', 'ignored')}>
                 <X className="w-3 h-3" />
               </GutterButton>
             </>
@@ -483,10 +493,10 @@ const ChunkView = React.memo(function ChunkView({
         <div className="flex flex-col items-center gap-1 py-1 border-x border-[#393B40]/50 bg-[#26282B]" style={{ gridColumn: 4, gridRow: `1 / span ${visible}` }}>
           {rightChanged && chunk.kind !== 'same' && (
             <>
-              <GutterButton active={chunk.rightState === 'accepted'} tone="accept" title="采用右侧。再点一次撤销" onClick={() => clickSide('right', 'accepted')}>
+              <GutterButton active={chunk.rightState === 'accepted'} tone="accept" title={t('merge.acceptRightAgain')} onClick={() => clickSide('right', 'accepted')}>
                 <ArrowLeft className="w-3.5 h-3.5" />
               </GutterButton>
-              <GutterButton active={chunk.rightState === 'ignored'} tone="ignore" title="忽略右侧。再点一次撤销" onClick={() => clickSide('right', 'ignored')}>
+              <GutterButton active={chunk.rightState === 'ignored'} tone="ignore" title={t('merge.ignoreRightAgain')} onClick={() => clickSide('right', 'ignored')}>
                 <X className="w-3 h-3" />
               </GutterButton>
             </>
@@ -495,7 +505,7 @@ const ChunkView = React.memo(function ChunkView({
       </div>
       {truncated && (
         <div className="px-3 py-1 text-[11px] text-[#EDA200] bg-[#3A3424]">
-          这一块有 {count} 行，视图只展示前 {DISPLAY_CAP} 行。可以用采用左侧 / 采用右侧，或编辑处理全文。
+          {t('merge.truncated', { count, cap: DISPLAY_CAP })}
         </div>
       )}
     </div>
@@ -511,6 +521,7 @@ function FallbackPanel({
   onSave: (content: string) => void;
   onText: (text: string) => void;
 }) {
+  const { t } = useI18n();
   const [text, setText] = useState(session.mode === 'raw' ? session.ours : session.ours || session.theirs);
   const onTextRef = useRef(onText);
   onTextRef.current = onText;
@@ -521,14 +532,14 @@ function FallbackPanel({
   }, [session]);
   return (
     <div className="flex-1 flex flex-col min-h-0 p-4 gap-3">
-      <div className="text-sm text-[#DFE1E5]">{session.note}</div>
+      <div className="text-sm text-[#DFE1E5]">{sessionNote(session)}</div>
       {session.mode !== 'raw' && (
         <div className="flex items-center gap-2">
           <button type="button" disabled={!session.ours && session.mode === 'binary'} onClick={() => onSave(session.ours)} className="px-3 py-1.5 rounded bg-[#3574F0] text-white text-xs disabled:opacity-40">
-            整份采用左侧
+            {t('merge.acceptFileLeft')}
           </button>
           <button type="button" disabled={!session.theirs && session.mode === 'binary'} onClick={() => onSave(session.theirs)} className="px-3 py-1.5 rounded bg-purple-500/30 text-purple-100 border border-purple-400/40 text-xs disabled:opacity-40">
-            整份采用右侧
+            {t('merge.acceptFileRight')}
           </button>
         </div>
       )}
@@ -545,7 +556,7 @@ function FallbackPanel({
       )}
       {session.mode !== 'binary' && (
         <button type="button" onClick={() => onSave(text)} className="self-start px-3 py-1.5 rounded bg-[#3574F0] text-white text-xs">
-          保存当前文本并标记已解决
+          {t('merge.saveText')}
         </button>
       )}
     </div>
@@ -562,6 +573,7 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
   onSave,
   onStats,
 }, ref) {
+  const { t } = useI18n();
   const session = useMemo(() => createSession(base, ours, theirs, working), [base, ours, theirs, working, sessionKey]);
   const [chunks, setChunks] = useState<MergeChunk[]>(session.chunks);
   const [rawMode, setRawMode] = useState(false);
@@ -570,7 +582,7 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [ask, setAsk] = useState<string | null>(null);
+  const [ask, setAsk] = useState<null | { kind: 'info'; text: string } | { kind: 'confirm-save'; text: string }>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const initialRef = useRef(session.chunks);
 
@@ -640,7 +652,7 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
   const fallbackText = useRef(session.ours);
   const save = () => {
     if (session.mode === 'binary') {
-      setAsk('二进制文件不能按行合并，请使用下方的整份采用左侧或右侧。');
+      setAsk({ kind: 'info', text: t('merge.binaryHint') });
       return;
     }
     if (session.mode !== 'merge') {
@@ -651,11 +663,11 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
     const openConflicts = Math.max(0, stats.unresolved - stats.pendingNonConflict);
     if ((!rawMode && stats.unresolved > 0) || hasConflictMarkers(text)) {
       const reason = hasConflictMarkers(text)
-        ? '结果里还留着冲突标记。'
+        ? t('merge.markersLeft')
         : openConflicts > 0
-          ? `还有 ${openConflicts} 处冲突没选择采用哪一侧。`
-          : `还有 ${stats.pendingNonConflict} 处无冲突改动未处理。`;
-      setAsk(`${reason}仍要按当前结果保存并标记已解决吗？`);
+          ? t('merge.openConflicts', { count: openConflicts })
+          : t('merge.pendingNonConflict', { count: stats.pendingNonConflict });
+      setAsk({ kind: 'confirm-save', text: t('merge.confirmSave', { reason }) });
       return;
     }
     onSave(text);
@@ -720,12 +732,12 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
       <div className="flex-1 flex flex-col min-h-0 relative">
         {ask && (
           <div className="px-3 py-2 bg-[#3A3424] border-b border-[#EDA200]/40 text-[12px] text-[#F3E2B3] flex items-center gap-2">
-            <span className="flex-1">{ask}</span>
-            <button type="button" onClick={() => setAsk(null)} className="px-2 py-1 rounded border border-[#EDA200]/40">知道了</button>
+            <span className="flex-1">{ask.text}</span>
+            <button type="button" onClick={() => setAsk(null)} className="px-2 py-1 rounded border border-[#EDA200]/40">{t('merge.gotIt')}</button>
           </div>
         )}
         <FallbackPanel session={session} onSave={onSave} onText={text => { fallbackText.current = text; }} />
-        {loading && <div className="absolute inset-0 bg-black/35 flex items-center justify-center text-sm text-white">正在读取冲突…</div>}
+        {loading && <div className="absolute inset-0 bg-black/35 flex items-center justify-center text-sm text-white">{t('merge.loading')}</div>}
       </div>
     );
   }
@@ -736,13 +748,13 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
     <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-[#1E1F22] relative">
       <div className="px-2 py-1.5 border-b border-[#393B40] bg-[#2B2D30] flex items-center gap-1.5 flex-wrap text-[11px]">
         <div className="flex items-center rounded border border-[#393B40] bg-[#1E1F22]">
-          <button type="button" title="上一处未解决冲突 (Shift+F7)" disabled={focusIndex <= 0} onClick={() => jump(f7List, -1)} className="p-1 disabled:opacity-30 hover:bg-[#35373C]">
+          <button type="button" title={t('merge.prevConflict')} disabled={focusIndex <= 0} onClick={() => jump(f7List, -1)} className="p-1 disabled:opacity-30 hover:bg-[#35373C]">
             <ChevronUp className="w-3.5 h-3.5" />
           </button>
-          <span className="px-1.5 font-mono text-[#DFE1E5] min-w-[92px] text-center" title="F7 下一处，Shift+F7 上一处">
-            {unresolved.length ? `冲突 ${Math.min(focusIndex + 1, unresolved.length)}/${unresolved.length}` : `变更 ${changes.length ? focusIndex + 1 : 0}/${changes.length}`}
+          <span className="px-1.5 font-mono text-[#DFE1E5] min-w-[92px] text-center" title={t('merge.navTitle')}>
+            {unresolved.length ? t('merge.conflictPos', { index: Math.min(focusIndex + 1, unresolved.length), total: unresolved.length }) : t('merge.changePos', { index: changes.length ? focusIndex + 1 : 0, total: changes.length })}
           </span>
-          <button type="button" title="下一处未解决冲突 (F7)" disabled={!f7List.length || focusIndex >= f7List.length - 1} onClick={() => jump(f7List, 1)} className="p-1 disabled:opacity-30 hover:bg-[#35373C]">
+          <button type="button" title={t('merge.nextConflict')} disabled={!f7List.length || focusIndex >= f7List.length - 1} onClick={() => jump(f7List, 1)} className="p-1 disabled:opacity-30 hover:bg-[#35373C]">
             <ChevronDown className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -751,67 +763,67 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
             value={conflicts.some(chunk => chunk.id === activeId) ? activeId ?? '' : ''}
             onChange={event => setActiveId(event.target.value)}
             className="bg-[#1E1F22] border border-[#393B40] rounded px-1.5 py-1 text-[11px] text-[#DFE1E5] max-w-[220px]"
-            title="跳到某一处冲突"
+            title={t('merge.jumpTitle')}
           >
-            <option value="" disabled>跳到冲突</option>
+            <option value="" disabled>{t('merge.jump')}</option>
             {conflicts.map(chunk => (
               <option key={chunk.id} value={chunk.id}>
-                {isUnresolved(chunk) ? '未解决' : '已解决'} · 第 {chunk.baseStart + 1} 行
+                {t('merge.jumpLine', { state: isUnresolved(chunk) ? t('merge.unresolved') : t('merge.resolved'), line: chunk.baseStart + 1 })}
               </option>
             ))}
           </select>
         )}
         <div className="h-4 w-px bg-[#393B40]" />
         <div className="flex items-center rounded border border-[#393B40] overflow-hidden">
-          <button type="button" disabled={!pendingLeft} title="只应用左侧不与右侧重叠的改动" onClick={() => setChunks(prev => applyNonConflicting(prev, 'left'))} className="px-2 py-1 hover:bg-[#35373C] disabled:opacity-35">
-            Left
+          <button type="button" disabled={!pendingLeft} title={t('merge.applyLeftOnly')} onClick={() => setChunks(prev => applyNonConflicting(prev, 'left'))} className="px-2 py-1 hover:bg-[#35373C] disabled:opacity-35">
+            {t('merge.left')}
           </button>
           <button
             type="button"
             disabled={!pendingLeft && !pendingRight}
             title={pendingLeft || pendingRight
-              ? '应用所有不重叠的改动。真正重叠的冲突不会被自动选边，需要逐块确认。'
-              : '无冲突改动已经自动放进结果。若要逐块复查，点 Revert。'}
+              ? t('merge.applyAllTitle')
+              : t('merge.applyAllDoneTitle')}
             onClick={() => setChunks(prev => applyNonConflicting(prev, 'all'))}
             className={`px-2 py-1 border-x border-[#393B40] inline-flex items-center gap-1 disabled:cursor-default ${pendingLeft || pendingRight ? 'bg-purple-500/20 text-purple-100 hover:bg-purple-500/30' : appliedNonConflict ? 'bg-[#2C4A34]/50 text-[#8FD694]' : 'text-[#9DA0A8] disabled:opacity-35'}`}
           >
             <Sparkles className="w-3 h-3" />
-            {pendingLeft || pendingRight ? 'Apply All Non-Conflicting' : appliedNonConflict ? '无冲突已应用' : 'Apply All Non-Conflicting'}
+            {pendingLeft || pendingRight ? t('merge.applyAll') : appliedNonConflict ? t('merge.applyAllDone') : t('merge.applyAll')}
           </button>
-          <button type="button" disabled={!pendingRight} title="只应用右侧不与左侧重叠的改动" onClick={() => setChunks(prev => applyNonConflicting(prev, 'right'))} className="px-2 py-1 hover:bg-[#35373C] disabled:opacity-35">
-            Right
+          <button type="button" disabled={!pendingRight} title={t('merge.applyRightOnly')} onClick={() => setChunks(prev => applyNonConflicting(prev, 'right'))} className="px-2 py-1 hover:bg-[#35373C] disabled:opacity-35">
+            {t('merge.right')}
           </button>
         </div>
         <button
           type="button"
           disabled={stats.simpleReady === 0}
-          title="合并同一行里互不重叠的修改。这种冲突不会被 Apply All Non-Conflicting 自动处理。"
+          title={t('merge.resolveSimpleTitle')}
           onClick={() => setChunks(prev => resolveSimpleConflicts(prev))}
           className="px-2 py-1 rounded border border-purple-400/40 bg-purple-500/15 text-purple-100 disabled:opacity-35 inline-flex items-center gap-1"
         >
           <Sparkles className="w-3 h-3" />
-          Resolve Simple{stats.simpleReady ? ` (${stats.simpleReady})` : ''}
+          {t('merge.resolveSimple')}{stats.simpleReady ? ` (${stats.simpleReady})` : ''}
         </button>
-        <button type="button" title="整份采用你的版本" onClick={() => setChunks(prev => acceptFile(prev, 'left'))} className="px-2 py-1 rounded border border-[#3574F0]/40 text-[#9EC1FF] hover:bg-[#3574F0]/15">
-          Accept Yours
+        <button type="button" title={t('merge.acceptYoursTitle')} onClick={() => setChunks(prev => acceptFile(prev, 'left'))} className="px-2 py-1 rounded border border-[#3574F0]/40 text-[#9EC1FF] hover:bg-[#3574F0]/15">
+          {t('merge.acceptYours')}
         </button>
-        <button type="button" title="整份采用对方版本" onClick={() => setChunks(prev => acceptFile(prev, 'right'))} className="px-2 py-1 rounded border border-purple-400/40 text-purple-200 hover:bg-purple-500/15">
-          Accept Theirs
+        <button type="button" title={t('merge.acceptTheirsTitle')} onClick={() => setChunks(prev => acceptFile(prev, 'right'))} className="px-2 py-1 rounded border border-purple-400/40 text-purple-200 hover:bg-purple-500/15">
+          {t('merge.acceptTheirs')}
         </button>
-        <button type="button" disabled={!appliedNonConflict} title="把已自动应用的无冲突改动退回未处理，方便逐块复查" onClick={() => setChunks(prev => revertNonConflicting(prev))} className="px-2 py-1 rounded border border-[#393B40] text-[#C2C5CC] hover:bg-[#35373C] disabled:opacity-35 inline-flex items-center gap-1">
+        <button type="button" disabled={!appliedNonConflict} title={t('merge.revertTitle')} onClick={() => setChunks(prev => revertNonConflicting(prev))} className="px-2 py-1 rounded border border-[#393B40] text-[#C2C5CC] hover:bg-[#35373C] disabled:opacity-35 inline-flex items-center gap-1">
           <Undo2 className="w-3 h-3" />
-          Revert
+          {t('merge.revert')}
         </button>
-        <button type="button" title="恢复打开文件时的选择" onClick={() => { setChunks(initialRef.current); setRawMode(false); }} className="p-1 rounded border border-[#393B40] text-[#9DA0A8] hover:bg-[#35373C]" >
+        <button type="button" title={t('merge.restoreInitial')} onClick={() => { setChunks(initialRef.current); setRawMode(false); }} className="p-1 rounded border border-[#393B40] text-[#9DA0A8] hover:bg-[#35373C]" >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
-        <button type="button" title="在冲突块里显示基准版本" onClick={() => setShowBase(value => !value)} className={`px-2 py-1 rounded border inline-flex items-center gap-1 ${showBase ? 'border-[#3574F0]/50 text-[#9EC1FF] bg-[#3574F0]/15' : 'border-[#393B40] text-[#C2C5CC]'}`}>
+        <button type="button" title={t('merge.showBase')} onClick={() => setShowBase(value => !value)} className={`px-2 py-1 rounded border inline-flex items-center gap-1 ${showBase ? 'border-[#3574F0]/50 text-[#9EC1FF] bg-[#3574F0]/15' : 'border-[#393B40] text-[#C2C5CC]'}`}>
           {showBase ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-          Base
+          {t('merge.base')}
         </button>
         <button
           type="button"
-          title="离开逐块视图，直接编辑完整结果"
+          title={t('merge.editResultTitle')}
           onClick={() => {
             if (rawMode) {
               setRawMode(false);
@@ -822,28 +834,28 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
           }}
           className={`px-2 py-1 rounded border ${rawMode ? 'border-[#3574F0]/50 text-[#9EC1FF]' : 'border-[#393B40] text-[#C2C5CC] hover:bg-[#35373C]'}`}
         >
-          {rawMode ? '回到对齐合并' : 'Edit Result'}
+          {rawMode ? t('merge.backToMerge') : t('merge.editResult')}
         </button>
       </div>
       <div className="px-3 py-1 border-b border-[#393B40]/80 flex items-center gap-3 flex-wrap text-[10px] text-[#9DA0A8] bg-[#232428]">
-        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#2A4060] shadow-[inset_2px_0_0_#4C8DFF]" />修改</span>
-        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#2C4A34] shadow-[inset_2px_0_0_#59A869]" />新增</span>
-        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#4A3032] shadow-[inset_2px_0_0_#E35967]" />删除</span>
-        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#5A3236] shadow-[inset_2px_0_0_#E35967]" />冲突</span>
-        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#3A3424] shadow-[inset_2px_0_0_#EDA200]" />未应用</span>
+        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#2A4060] shadow-[inset_2px_0_0_#4C8DFF]" />{t('merge.legendModified')}</span>
+        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#2C4A34] shadow-[inset_2px_0_0_#59A869]" />{t('merge.legendAdded')}</span>
+        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#4A3032] shadow-[inset_2px_0_0_#E35967]" />{t('merge.legendDeleted')}</span>
+        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#5A3236] shadow-[inset_2px_0_0_#E35967]" />{t('merge.legendConflict')}</span>
+        <span className="inline-flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 bg-[#3A3424] shadow-[inset_2px_0_0_#EDA200]" />{t('merge.legendPending')}</span>
         <span className="ml-auto">
           {stats.unresolved - stats.pendingNonConflict > 0
-            ? <span className="text-[#FFB4B8]">{stats.unresolved - stats.pendingNonConflict} 处冲突未处理</span>
+            ? <span className="text-[#FFB4B8]">{t('merge.unresolvedCount', { count: stats.unresolved - stats.pendingNonConflict })}</span>
             : stats.pendingNonConflict > 0
-              ? <span className="text-[#EDA200]">{stats.pendingNonConflict} 处无冲突改动未应用</span>
-              : <span className="text-[#8FD694]">冲突已处理，可以保存</span>}
-          <span className="text-[#6F737A]"> · F7 跳转 · Alt+1/2 采用左/右 · &gt;&gt; 采用 · × 忽略</span>
+              ? <span className="text-[#EDA200]">{t('merge.pendingCount', { count: stats.pendingNonConflict })}</span>
+              : <span className="text-[#8FD694]">{t('merge.readyToSave')}</span>}
+          <span className="text-[#6F737A]">{t('merge.shortcuts')}</span>
         </span>
       </div>
       {ask && (
         <div className="px-3 py-2 bg-[#3A3424] border-b border-[#EDA200]/40 text-[12px] text-[#F3E2B3] flex items-center gap-2">
-          <span className="flex-1">{ask}</span>
-          {session.mode === 'merge' && ask.includes('保存') && (
+          <span className="flex-1">{ask.text}</span>
+          {ask.kind === 'confirm-save' && (
             <button
               type="button"
               onClick={() => {
@@ -853,11 +865,11 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
               }}
               className="px-2 py-1 rounded bg-[#EDA200] text-[#1E1F22] font-medium"
             >
-              仍然保存
+              {t('merge.saveAnyway')}
             </button>
           )}
           <button type="button" onClick={() => setAsk(null)} className="px-2 py-1 rounded border border-[#EDA200]/40">
-            返回处理
+            {t('merge.back')}
           </button>
         </div>
       )}
@@ -873,27 +885,27 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
           <div className="min-w-full" style={{ minWidth: contentMinWidth }}>
             <div className="sticky top-0 z-10 grid w-full border-b border-[#393B40] bg-[#2B2D30] text-xs" style={{ gridTemplateColumns: COLS }}>
               <div className="h-8 px-3 flex items-center justify-between">
-                <span className="font-semibold text-[#4C8DFF]">Your Version</span>
-                <button type="button" title="整份采用左侧" onClick={() => setChunks(prev => acceptFile(prev, 'left'))} className="px-1.5 py-0.5 rounded bg-[#3574F0]/15 text-[#9EC1FF] inline-flex items-center gap-1 text-[11px]">
-                  整份采用 <ArrowRight className="w-3 h-3" />
+                <span className="font-semibold text-[#4C8DFF]">{t('merge.yourVersion')}</span>
+                <button type="button" title={t('merge.acceptFileLeft')} onClick={() => setChunks(prev => acceptFile(prev, 'left'))} className="px-1.5 py-0.5 rounded bg-[#3574F0]/15 text-[#9EC1FF] inline-flex items-center gap-1 text-[11px]">
+                  {t('merge.acceptWhole')} <ArrowRight className="w-3 h-3" />
                 </button>
               </div>
               <div className="border-x border-[#393B40]/60" />
               <div className="h-8 px-3 flex items-center gap-1.5 font-semibold text-[#8FD694]">
-                Result
+                {t('merge.result')}
               </div>
               <div className="border-x border-[#393B40]/60" />
               <div className="h-8 px-3 flex items-center justify-between">
-                <button type="button" title="整份采用右侧" onClick={() => setChunks(prev => acceptFile(prev, 'right'))} className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-200 inline-flex items-center gap-1 text-[11px]">
-                  <ArrowLeft className="w-3 h-3" /> 整份采用
+                <button type="button" title={t('merge.acceptFileRight')} onClick={() => setChunks(prev => acceptFile(prev, 'right'))} className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-200 inline-flex items-center gap-1 text-[11px]">
+                  <ArrowLeft className="w-3 h-3" /> {t('merge.acceptWhole')}
                 </button>
-                <span className="font-semibold text-purple-300">Their Version</span>
+                <span className="font-semibold text-purple-300">{t('merge.theirVersion')}</span>
               </div>
             </div>
             {chunks.length === 0 ? (
-              <div className="p-8 text-center text-sm text-[#6F737A]">左右版本没有可显示的内容。</div>
+              <div className="p-8 text-center text-sm text-[#6F737A]">{t('merge.nothingToShow')}</div>
             ) : chunks.every(chunk => chunk.kind === 'context') ? (
-              <div className="p-6 text-center text-sm text-[#9DA0A8]">左右相对基准没有差异，可以直接保存并标记已解决。</div>
+              <div className="p-6 text-center text-sm text-[#9DA0A8]">{t('merge.noDiff')}</div>
             ) : null}
             {chunks.map((chunk, index) => (
               <ChunkView
@@ -915,7 +927,7 @@ export const MergeViewer = forwardRef<MergeViewerHandle, MergeViewerProps>(funct
       )}
       {loading && (
         <div className="absolute inset-0 bg-black/35 flex items-center justify-center text-sm text-white">
-          正在读取冲突…
+          {t('merge.loading')}
         </div>
       )}
     </div>

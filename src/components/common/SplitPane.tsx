@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useI18n } from '../../i18n/react';
 
 type Orientation = 'horizontal' | 'vertical';
 
@@ -45,6 +46,7 @@ export const SplitPane: React.FC<SplitPaneProps> = ({
   start,
   end,
 }) => {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const [preferred, setPreferred] = useState(() => readSize(storageKey, defaultSize, min, max));
   const [containerSpan, setContainerSpan] = useState(0);
@@ -123,7 +125,7 @@ export const SplitPane: React.FC<SplitPaneProps> = ({
         aria-valuemin={min}
         aria-valuemax={max}
         aria-valuenow={Math.round(shown)}
-        title={horizontal ? '拖拽调整宽度，双击恢复默认' : '拖拽调整高度，双击恢复默认'}
+        title={horizontal ? t('window.dragWidth') : t('window.dragHeight')}
         onPointerDown={startDrag}
         onPointerMove={onMove}
         onPointerUp={endDrag}

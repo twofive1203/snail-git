@@ -11,6 +11,7 @@ import {
   Check, 
   FileDiff 
 } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 type RefKind = 'head' | 'tag' | 'remote' | 'local';
 
@@ -112,6 +113,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   onCompareBranch,
   currentBranch = '',
 }) => {
+  const { t } = useI18n();
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
@@ -162,11 +164,11 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
       <table className="w-full table-fixed border-collapse text-xs font-sans min-w-[760px]">
         <thead className="sticky top-0 bg-jb-panel/95 border-b border-jb-border z-10 text-jb-text-muted font-medium select-none shadow-sm">
           <tr>
-            <th className="py-1.5 px-3 text-left font-normal w-20">Graph</th>
-            <th className="py-1.5 px-2 text-left font-normal">Description</th>
-            <th className="py-1.5 px-2 text-left font-normal w-32">Author</th>
-            <th className="py-1.5 px-2 text-left font-normal w-28">Date</th>
-            <th className="py-1.5 pr-4 text-right font-normal w-24">Commit</th>
+            <th className="py-1.5 px-3 text-left font-normal w-20">{t('graph.column.graph')}</th>
+            <th className="py-1.5 px-2 text-left font-normal">{t('graph.column.description')}</th>
+            <th className="py-1.5 px-2 text-left font-normal w-32">{t('graph.column.author')}</th>
+            <th className="py-1.5 px-2 text-left font-normal w-28">{t('graph.column.date')}</th>
+            <th className="py-1.5 pr-4 text-right font-normal w-24">{t('graph.column.commit')}</th>
           </tr>
         </thead>
         <tbody>
@@ -294,7 +296,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                                   return next;
                                 });
                               }}
-                              title={expanded ? '收起引用' : `还有 ${hiddenCount} 个引用`}
+                              title={expanded ? t('graph.collapseRefs') : t('graph.moreRefs', { count: hiddenCount })}
                               className="text-[10px] px-1.5 py-0.5 rounded-full border border-jb-border bg-jb-panel text-jb-text-muted hover:text-jb-text-primary shrink-0"
                             >
                               {expanded ? '–' : `+${hiddenCount}`}
@@ -321,7 +323,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                       e.stopPropagation();
                       copyHash(commit.hash);
                     }}
-                    title="点击复制完整 Hash"
+                    title={t('graph.copyHash')}
                     className="hover:text-jb-blue transition-colors px-1 py-0.5 rounded hover:bg-jb-panel"
                   >
                     {copiedHash === commit.hash ? (
@@ -346,13 +348,13 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <div className="px-3 py-1 font-mono text-[11px] text-jb-text-muted border-b border-jb-border/60 flex items-center justify-between">
-            <span>Commit {contextMenu.commit.shortHash}</span>
+            <span>{t('graph.commit', { hash: contextMenu.commit.shortHash })}</span>
             <button 
               onClick={() => copyHash(contextMenu.commit!.hash)}
               className="text-jb-blue hover:underline flex items-center space-x-0.5"
             >
               <Copy className="w-2.5 h-2.5" />
-              <span>Copy</span>
+              <span>{t('graph.copy')}</span>
             </button>
           </div>
 
@@ -361,11 +363,11 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2"
           >
             <FileDiff className="w-3.5 h-3.5 text-jb-blue" />
-            <span>Show Diff with Local</span>
+            <span>{t('graph.showDiff')}</span>
           </button>
 
           {contextMenu.branchName === currentBranch && (
-            <div className="px-3 py-1.5 text-jb-text-muted">已是当前分支</div>
+            <div className="px-3 py-1.5 text-jb-text-muted">{t('graph.alreadyCurrent')}</div>
           )}
           {(contextMenu.branchName && contextMenu.branchName !== currentBranch
             ? [contextMenu.branchName]
@@ -380,7 +382,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
               className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2"
             >
               <GitBranch className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="truncate">Compare {name} with Current</span>
+              <span className="truncate">{t('graph.compare', { name })}</span>
             </button>
           ))}
 
@@ -392,7 +394,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2"
           >
             <GitBranch className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Checkout Revision '{contextMenu.commit.shortHash}'</span>
+            <span>{t('graph.checkout', { hash: contextMenu.commit.shortHash })}</span>
           </button>
 
           <button
@@ -403,7 +405,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2"
           >
             <PlusCircle className="w-3.5 h-3.5 text-purple-400" />
-            <span>New Branch from Here...</span>
+            <span>{t('graph.newBranch')}</span>
           </button>
 
           <div className="h-px bg-jb-border my-1" />
@@ -416,7 +418,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2"
           >
             <Scissors className="w-3.5 h-3.5 text-amber-400" />
-            <span>Cherry-pick Commit</span>
+            <span>{t('graph.cherryPick')}</span>
           </button>
 
           <button
@@ -427,12 +429,12 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2"
           >
             <Undo2 className="w-3.5 h-3.5 text-rose-400" />
-            <span>Revert Commit</span>
+            <span>{t('graph.revert')}</span>
           </button>
 
           <button
             onClick={() => {
-              if (confirm(`将当前分支混合重置到 ${contextMenu.commit!.shortHash}？工作区修改会保留，已暂存内容会取消暂存。`)) {
+              if (confirm(t('graph.resetConfirm', { hash: contextMenu.commit!.shortHash }))) {
                 onReset?.(contextMenu.commit!.hash);
               }
               setContextMenu(prev => ({ ...prev, visible: false }));
@@ -440,7 +442,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2 text-rose-300"
           >
             <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-            <span>Reset Current Branch to Here...</span>
+            <span>{t('graph.reset')}</span>
           </button>
         </div>
       )}

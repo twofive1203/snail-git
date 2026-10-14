@@ -20,6 +20,7 @@ import {
   GitPullRequest
 } from 'lucide-react';
 import { AddProjectModal } from './AddProjectModal';
+import { useI18n } from '../../i18n/react';
 
 export type SidebarTab = 'repos' | 'branches' | 'shelf';
 
@@ -80,6 +81,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onDropStash,
   onCreateStash,
 }) => {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<SidebarTab>('repos');
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState('');
@@ -133,7 +135,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             {/* Repositories 图标 */}
             <button
               onClick={() => handleTabClick('repos')}
-              title="项目仓库 (Repositories)"
+              title={t('project.repos')}
               className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all relative ${
                 isDrawerOpen && activeTab === 'repos'
                   ? 'bg-[#3574F0] text-white shadow-sm'
@@ -149,7 +151,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             {/* Branches 图标 */}
             <button
               onClick={() => handleTabClick('branches')}
-              title="分支管理 (Branches)"
+              title={t('project.branches')}
               className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all relative ${
                 isDrawerOpen && activeTab === 'branches'
                   ? 'bg-[#3574F0] text-white shadow-sm'
@@ -162,7 +164,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             {/* Shelf & Stash 图标 */}
             <button
               onClick={() => handleTabClick('shelf')}
-              title="架藏与贮藏 (Shelf & Stash)"
+              title={t('project.shelf')}
               className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all relative ${
                 isDrawerOpen && activeTab === 'shelf'
                   ? 'bg-[#3574F0] text-white shadow-sm'
@@ -180,7 +182,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
           <div className="flex flex-col items-center space-y-2 w-full px-1">
             <button
               onClick={() => setIsAddModalOpen(true)}
-              title="添加本地 Git 仓库"
+              title={t('project.addRepo')}
               className="w-8 h-8 rounded-md flex items-center justify-center text-[#9DA0A8] hover:text-[#DFE1E5] hover:bg-[#2B2D30] transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -188,7 +190,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
 
             <button
               onClick={() => setIsDrawerOpen(!isDrawerOpen)}
-              title={isDrawerOpen ? "收起侧边抽屉" : "展开侧边抽屉"}
+              title={isDrawerOpen ? t('project.collapse') : t('project.expand')}
               className="w-8 h-8 rounded-md flex items-center justify-center text-[#9DA0A8] hover:text-[#DFE1E5] hover:bg-[#2B2D30] transition-colors"
             >
               {isDrawerOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
@@ -205,7 +207,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                 <div className="h-10 px-3 border-b border-[#393B40] flex items-center justify-between bg-[#2B2D30]/60">
                   <div className="flex items-center space-x-1.5">
                     <FolderGit2 className="w-3.5 h-3.5 text-[#3574F0]" />
-                    <span className="font-semibold text-xs text-[#DFE1E5]">Repositories</span>
+                    <span className="font-semibold text-xs text-[#DFE1E5]">{t('project.repositories')}</span>
                     <span className="text-[10px] font-mono text-[#8C9099] bg-[#1E1F22] px-1.5 py-0.2 rounded-full border border-[#393B40]">
                       {repositories.length}
                     </span>
@@ -213,14 +215,14 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   <div className="flex items-center space-x-1">
                     <button
                       onClick={() => setIsAddModalOpen(true)}
-                      title="添加 Git 项目文件夹"
+                      title={t('project.addFolder')}
                       className="p-1 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5]"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => setIsDrawerOpen(false)}
-                      title="关闭抽屉"
+                      title={t('project.closeDrawer')}
                       className="p-1 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5]"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -236,7 +238,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                       type="text"
                       value={repoSearchQuery}
                       onChange={(e) => setRepoSearchQuery(e.target.value)}
-                      placeholder="搜索仓库或路径..."
+                      placeholder={t('project.searchRepos')}
                       className="w-full bg-[#2B2D30] border border-[#393B40] rounded pl-6 pr-2 py-1 text-xs text-[#DFE1E5] placeholder-[#6F737A] focus:outline-none focus:border-[#3574F0]"
                     />
                   </div>
@@ -273,14 +275,14 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                                 e.stopPropagation();
                                 onToggleFavorite(repo.id);
                               }}
-                              title={repo.isFavorite ? "取消收藏" : "收藏置顶"}
+                              title={repo.isFavorite ? t('header.unfavorite') : t('header.favorite')}
                               className="p-1 rounded hover:bg-[#35373C] text-[#8C9099] hover:text-amber-400"
                             >
                               <Star className={`w-3 h-3 ${repo.isFavorite ? 'fill-amber-400 text-amber-400' : ''}`} />
                             </button>
                             <button
                               onClick={(e) => handleCopyPath(repo.path, e)}
-                              title="复制路径"
+                              title={t('header.copyPath')}
                               className="p-1 rounded hover:bg-[#35373C] text-[#8C9099] hover:text-[#DFE1E5]"
                             >
                               <Copy className="w-3 h-3" />
@@ -290,7 +292,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                                 e.stopPropagation();
                                 onRevealRepo?.(repo);
                               }}
-                              title="在资源管理器中打开"
+                              title={t('project.reveal')}
                               className="p-1 rounded hover:bg-[#35373C] text-[#8C9099] hover:text-[#DFE1E5]"
                             >
                               <ExternalLink className="w-3 h-3" />
@@ -298,11 +300,11 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (confirm(`确定要从列表中移除 "${repo.name}" 吗？`)) {
+                                if (confirm(t('project.removeConfirm', { name: repo.name }))) {
                                   onRemoveRepo(repo.id);
                                 }
                               }}
-                              title="移除此仓库"
+                              title={t('project.remove')}
                               className="p-1 rounded hover:bg-[#35373C] text-[#8C9099] hover:text-rose-400"
                             >
                               <Trash2 className="w-3 h-3" />
@@ -331,7 +333,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                             ) : (
                               <span className="text-emerald-400 flex items-center space-x-0.5 text-[9px]">
                                 <Check className="w-2.5 h-2.5" />
-                                <span>clean</span>
+                                <span>{t('common.clean')}</span>
                               </span>
                             )}
                           </div>
@@ -349,7 +351,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                 <div className="h-10 px-3 border-b border-[#393B40] flex items-center justify-between bg-[#2B2D30]/60">
                   <div className="flex items-center space-x-1.5">
                     <BranchIcon className="w-3.5 h-3.5 text-[#3574F0]" />
-                    <span className="font-semibold text-xs text-[#DFE1E5]">Branches</span>
+                    <span className="font-semibold text-xs text-[#DFE1E5]">{t('project.branchesTitle')}</span>
                     <span className="text-[10px] font-mono text-[#8C9099] bg-[#1E1F22] px-1.5 py-0.2 rounded-full border border-[#393B40]">
                       {branches.length}
                     </span>
@@ -357,17 +359,17 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   <div className="flex items-center space-x-1">
                     <button
                       onClick={() => {
-                        const name = prompt('输入新分支名称：', 'feature/');
+                        const name = prompt(t('branches.newPrompt'), 'feature/');
                         if (name) onCreateBranch?.(name);
                       }}
-                      title="新建分支"
+                      title={t('project.newBranch')}
                       className="p-1 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5]"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => setIsDrawerOpen(false)}
-                      title="关闭抽屉"
+                      title={t('project.closeDrawer')}
                       className="p-1 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5]"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -382,7 +384,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                       type="text"
                       value={branchSearchQuery}
                       onChange={(e) => setBranchSearchQuery(e.target.value)}
-                      placeholder="搜索分支..."
+                      placeholder={t('project.searchBranches')}
                       className="w-full bg-[#2B2D30] border border-[#393B40] rounded pl-6 pr-2 py-1 text-xs text-[#DFE1E5] placeholder-[#6F737A] focus:outline-none focus:border-[#3574F0]"
                     />
                   </div>
@@ -392,7 +394,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   {/* 本地分支 */}
                   <div>
                     <div className="text-[11px] font-semibold text-[#8C9099] uppercase tracking-wider mb-1 px-1">
-                      Local Branches ({localBranches.length})
+                      {t('branches.local', { count: localBranches.length })}
                     </div>
                     <div className="space-y-0.5">
                       {localBranches.map((b) => {
@@ -424,19 +426,19 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                                   onToggleFavoriteBranch?.(b);
                                 }}
                                 className="p-0.5 text-[#8C9099] hover:text-amber-400"
-                                title="收藏"
+                                title={t('project.favorite')}
                               >
                                 <Star className={`w-3 h-3 ${b.isFavorite ? 'fill-amber-400 text-amber-400' : ''}`} />
                               </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (confirm(`将分支 '${b.name}' 合并到当前分支 '${currentBranch}'？`)) {
+                                  if (confirm(t('project.mergeConfirm', { name: b.name, current: currentBranch }))) {
                                     onMergeBranch?.(b.name);
                                   }
                                 }}
                                 className="p-0.5 text-[#8C9099] hover:text-[#DFE1E5]"
-                                title="合并到当前分支"
+                                title={t('project.mergeInto')}
                               >
                                 <GitMerge className="w-3 h-3" />
                               </button>
@@ -451,7 +453,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   {remoteBranches.length > 0 && (
                     <div>
                       <div className="text-[11px] font-semibold text-[#8C9099] uppercase tracking-wider mb-1 px-1">
-                        Remote Branches ({remoteBranches.length})
+                        {t('branches.remote', { count: remoteBranches.length })}
                       </div>
                       <div className="space-y-0.5">
                         {remoteBranches.map((b) => (
@@ -479,19 +481,19 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                 <div className="h-10 px-3 border-b border-[#393B40] flex items-center justify-between bg-[#2B2D30]/60">
                   <div className="flex items-center space-x-1.5">
                     <Archive className="w-3.5 h-3.5 text-amber-400" />
-                    <span className="font-semibold text-xs text-[#DFE1E5]">Shelf & Stash</span>
+                    <span className="font-semibold text-xs text-[#DFE1E5]">{t('header.shelf')}</span>
                   </div>
                   <div className="flex items-center space-x-1">
                     <button
                       onClick={() => onCreateStash?.()}
-                      title="快速暂存 (Stash)"
+                      title={t('project.quickStash')}
                       className="p-1 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5]"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => setIsDrawerOpen(false)}
-                      title="关闭抽屉"
+                      title={t('project.closeDrawer')}
                       className="p-1 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5]"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -503,10 +505,10 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   {/* Shelves */}
                   <div>
                     <div className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider mb-1 px-1 flex items-center justify-between">
-                      <span>Shelves ({shelves.length})</span>
+                      <span>{t('project.shelves', { count: shelves.length })}</span>
                     </div>
                     {shelves.length === 0 ? (
-                      <div className="text-[11px] text-[#6F737A] px-2 py-1">暂无架藏内容</div>
+                      <div className="text-[11px] text-[#6F737A] px-2 py-1">{t('project.noShelves')}</div>
                     ) : (
                       <div className="space-y-1">
                         {shelves.map((s) => (
@@ -515,26 +517,26 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                             className="p-2 rounded bg-[#2B2D30]/60 border border-[#393B40] space-y-1"
                           >
                             <div className="flex items-center justify-between">
-                              <span className="font-medium text-[#DFE1E5] truncate">{s.name || '未命名架藏'}</span>
+                              <span className="font-medium text-[#DFE1E5] truncate">{s.name || t('project.unnamedShelf')}</span>
                               <div className="flex items-center space-x-1">
                                 <button
                                   onClick={() => onUnshelve?.(s.id)}
                                   className="text-[10px] text-[#3574F0] hover:underline"
-                                  title="恢复架藏更改到工作区"
+                                  title={t('project.restoreShelf')}
                                 >
-                                  恢复
+                                  {t('project.restore')}
                                 </button>
                                 <button
                                   onClick={() => onDeleteShelf?.(s.id)}
                                   className="text-[10px] text-rose-400 hover:underline ml-1"
-                                  title="删除此架藏"
+                                  title={t('project.deleteShelf')}
                                 >
-                                  删除
+                                  {t('common.delete')}
                                 </button>
                               </div>
                             </div>
                             <div className="text-[10px] text-[#8C9099] flex items-center justify-between">
-                              <span>{s.files?.length || 0} 个文件</span>
+                              <span>{t('common.files', { count: s.files?.length || 0 })}</span>
                               <span>{s.date}</span>
                             </div>
                           </div>
@@ -546,10 +548,10 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   {/* Stashes */}
                   <div>
                     <div className="text-[11px] font-semibold text-[#3574F0] uppercase tracking-wider mb-1 px-1 flex items-center justify-between">
-                      <span>Stashes ({stashes.length})</span>
+                      <span>{t('project.stashes', { count: stashes.length })}</span>
                     </div>
                     {stashes.length === 0 ? (
-                      <div className="text-[11px] text-[#6F737A] px-2 py-1">暂无贮藏内容</div>
+                      <div className="text-[11px] text-[#6F737A] px-2 py-1">{t('project.noStashes')}</div>
                     ) : (
                       <div className="space-y-1">
                         {stashes.map((st) => (
@@ -568,16 +570,16 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                                 <button
                                   onClick={() => onApplyStash?.(st)}
                                   className="text-[#3574F0] hover:underline"
-                                  title="应用贮藏变更"
+                                  title={t('project.applyStash')}
                                 >
-                                  应用
+                                  {t('project.apply')}
                                 </button>
                                 <button
                                   onClick={() => onDropStash?.(st)}
                                   className="text-rose-400 hover:underline"
-                                  title="丢弃贮藏"
+                                  title={t('project.dropStash')}
                                 >
-                                  丢弃
+                                  {t('project.drop')}
                                 </button>
                               </div>
                             </div>

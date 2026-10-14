@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Minus, Square, X } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauriEnvironment } from '../services/gitService';
+import { useI18n } from '../i18n/react';
 
 type ResizeDirection = 'East' | 'North' | 'NorthEast' | 'NorthWest' | 'South' | 'SouthEast' | 'SouthWest' | 'West';
 
@@ -48,6 +49,7 @@ function RestoreIcon() {
 
 /** Windows 风格标题栏按钮。无边框窗口下替代系统标题栏。 */
 export const WindowControls: React.FC = () => {
+  const { t } = useI18n();
   const [maximized, setMaximized] = useMaximized();
   if (!isTauriEnvironment()) return null;
 
@@ -57,7 +59,7 @@ export const WindowControls: React.FC = () => {
     <div className="flex items-stretch h-11 shrink-0" data-tauri-drag-region="false">
       <button
         type="button"
-        title="最小化"
+        title={t('window.minimize')}
         className={buttonClass}
         onClick={() => { void runWindow('minimize').catch(() => undefined); }}
       >
@@ -65,7 +67,7 @@ export const WindowControls: React.FC = () => {
       </button>
       <button
         type="button"
-        title={maximized ? '还原' : '最大化'}
+        title={maximized ? t('window.restore') : t('window.maximize')}
         className={buttonClass}
         onClick={() => {
           void runWindow('toggleMaximize').then(async () => {
@@ -77,7 +79,7 @@ export const WindowControls: React.FC = () => {
       </button>
       <button
         type="button"
-        title="关闭"
+        title={t('window.close')}
         className={`${buttonClass} hover:bg-[#C42B1C] hover:text-white`}
         onClick={() => { void runWindow('close').catch(() => undefined); }}
       >

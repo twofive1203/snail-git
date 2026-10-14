@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Layers } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 interface CommitActionBoxProps {
   stagedFilesCount: number;
@@ -18,6 +19,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
   onShelve,
   onCreatePatch,
 }) => {
+  const { t } = useI18n();
   const [message, setMessage] = useState('');
   const [isAmend, setIsAmend] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -32,12 +34,12 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
   }, [isAmend, lastCommitMessage]);
 
   const prefixes = [
-    { label: 'feat:', desc: '新特性' },
-    { label: 'fix:', desc: '修复' },
-    { label: 'refactor:', desc: '重构' },
-    { label: 'perf:', desc: '性能' },
-    { label: 'chore:', desc: '杂项' },
-    { label: 'docs:', desc: '文档' },
+    { label: 'feat:', desc: t('commit.prefix.feat') },
+    { label: 'fix:', desc: t('commit.prefix.fix') },
+    { label: 'refactor:', desc: t('commit.prefix.refactor') },
+    { label: 'perf:', desc: t('commit.prefix.perf') },
+    { label: 'chore:', desc: t('commit.prefix.chore') },
+    { label: 'docs:', desc: t('commit.prefix.docs') },
   ];
 
   const focusMessageEnd = (value: string) => {
@@ -80,11 +82,12 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
     <div className="flex-1 h-full min-h-0 bg-jb-panel p-3 flex flex-col text-xs select-none overflow-hidden">
       <div className="flex items-center justify-between mb-1.5 shrink-0">
         <div className="flex items-center space-x-1.5">
-          <span className="text-jb-text-muted text-[11px] font-medium">Prefixes:</span>
+          <span className="text-jb-text-muted text-[11px] font-medium">{t('commit.prefixes')}</span>
           {prefixes.map(p => (
             <button
               key={p.label}
               onClick={() => handleAddPrefix(p.label)}
+              title={p.desc}
               className="px-1.5 py-0.5 rounded bg-jb-bg hover:bg-jb-hover border border-jb-border/70 text-jb-text-secondary hover:text-jb-text-primary text-[10px] font-mono transition-colors"
             >
               {p.label}
@@ -99,7 +102,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
             onChange={(e) => handleAmendChange(e.target.checked)}
             className="rounded border-jb-border text-jb-blue focus:ring-0 cursor-pointer bg-jb-bg"
           />
-          <span className="text-[11px] font-medium" title="只改写尚未推送的最近一次提交">Amend Commit</span>
+          <span className="text-[11px] font-medium" title={t('commit.amendTitle')}>{t('commit.amend')}</span>
         </label>
       </div>
 
@@ -108,7 +111,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
           ref={textareaRef}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder="Commit message (Ctrl+Enter to commit)..."
+          placeholder={t('commit.placeholder')}
           onKeyDown={(e) => {
             if (e.ctrlKey && e.key === 'Enter' && message.trim() && stagedFilesCount > 0) {
               e.preventDefault();
@@ -120,7 +123,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
           className="w-full h-full bg-jb-bg border border-jb-border rounded p-2 pb-5 text-xs text-jb-text-primary placeholder-jb-text-muted font-sans resize-none focus:outline-none focus:border-jb-blue transition-colors leading-relaxed"
         />
         <span
-          title="Git 50/72：首行超过 50 字符建议缩短，超过 72 字符可能被截断"
+          title={t('commit.counterTitle')}
           className={`absolute right-2 bottom-1 text-[10px] font-mono pointer-events-none ${counterClass}`}
         >
           {subjectLength} / 72
@@ -129,14 +132,14 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
 
       <div className="flex items-center justify-between pt-1 shrink-0">
         <div className="flex items-center space-x-2 text-jb-text-muted text-[11px]">
-          <span>{stagedFilesCount} file(s) staged</span>
+          <span>{t('commit.staged', { count: stagedFilesCount })}</span>
           <span>•</span>
           <button 
             onClick={onShelve}
             className="text-jb-orange hover:underline flex items-center space-x-1"
           >
             <Layers className="w-3 h-3" />
-            <span>Shelve Changes...</span>
+            <span>{t('commit.shelve')}</span>
           </button>
         </div>
 
@@ -148,7 +151,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
               className="px-3 py-1.5 bg-jb-blue hover:bg-jb-blueHover disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium rounded-l text-xs flex items-center space-x-1.5 transition-colors shadow-sm"
             >
               <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-              <span>{isAmend ? 'Amend Commit' : 'Commit'}</span>
+              <span>{isAmend ? t('commit.amend') : t('commit.commit')}</span>
             </button>
 
             <button
@@ -169,7 +172,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
                 }}
                 className="w-full text-left px-3 py-1.5 hover:bg-jb-selected text-jb-text-primary hover:text-white flex items-center space-x-2"
               >
-                <span>Commit and Push...</span>
+                <span>{t('commit.commitAndPush')}</span>
               </button>
               <button
                 onClick={() => {
@@ -178,7 +181,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
                 }}
                 className="w-full text-left px-3 py-1.5 hover:bg-jb-selected text-jb-text-primary hover:text-white flex items-center space-x-2"
               >
-                <span>Create Patch...</span>
+                <span>{t('commit.createPatch')}</span>
               </button>
             </div>
           )}

@@ -16,6 +16,7 @@ import {
   Check,
   Minus
 } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 interface ChangelistTreeProps {
   changes: FileChange[];
@@ -58,6 +59,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   onDeleteUnversioned,
   repoKey = 'default',
 }) => {
+  const { t } = useI18n();
   const treeRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -392,7 +394,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
             if (!allUntracked) return;
             openUntrackedMenu(event, node.isFolder ? node.fullPath : (node.file?.path || node.fullPath), node.isFolder, node.file);
           }}
-          className={`flex items-center h-6 px-1 cursor-pointer transition-colors text-xs group relative ${
+          className={`flex items-center h-6 min-w-0 overflow-hidden px-1 cursor-pointer transition-colors text-xs group relative ${
             isSelected
               ? 'bg-[#2E436E] text-white font-medium'
               : 'hover:bg-[#2B2D30] text-[#DFE1E5]'
@@ -440,25 +442,25 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
             )}
           </div>
 
-          {/* 节点名称 */}
-          <span className="mr-1.5 flex-1 min-w-0">
+          {/* 节点名称。窄面板里必须截断，不能换行盖住下一行。 */}
+          <span className="mr-1.5 flex-1 min-w-0 overflow-hidden">
             {node.isFolder ? (
-              <FilePathDisplay path={node.name} />
+              <FilePathDisplay path={node.name} className="block max-w-full truncate" />
             ) : (
-              <FilePathDisplay path={node.name} filenameClassName={fileStatusClass(node.file?.status)} />
+              <FilePathDisplay path={node.name} className="block max-w-full truncate" filenameClassName={fileStatusClass(node.file?.status)} />
             )}
           </span>
 
           {/* 文件总数指示 (e.g. 13 个文件) */}
           {node.isFolder && (
-            <span className="text-[11px] text-[#8C9099] shrink-0 font-sans mr-2">
-              {node.fileCount} 个文件
+            <span className="text-[11px] text-[#8C9099] shrink-0 whitespace-nowrap font-sans mr-2">
+              {t('changes.fileCount', { count: node.fileCount })}
             </span>
           )}
 
           {/* 模块后缀标签 (如 eam-agent) */}
           {node.submoduleTag && node.isFolder && depth === 0 && (
-            <span className="text-[11px] text-[#6F737A] shrink-0 font-mono">
+            <span className="text-[11px] text-[#6F737A] shrink-0 max-w-[40%] truncate font-mono">
               {node.submoduleTag}
             </span>
           )}
@@ -500,14 +502,14 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
       className="flex-1 w-full h-full min-h-0 bg-[#1E1F22] flex flex-col select-none text-xs focus:outline-none"
       onClick={() => setContextMenu(null)}
     >
-      {/* 顶部工具栏 (1:1 还原截图顶栏) */}
-      <div className="h-9 px-2 border-b border-[#393B40] flex items-center justify-between bg-[#2B2D30] text-[#9DA0A8]">
+      {/* 顶部工具栏。窄面板里标签不能换行，否则会叠到图标和树节点上。 */}
+      <div className="h-9 shrink-0 px-2 border-b border-[#393B40] flex items-center justify-between gap-1 overflow-hidden bg-[#2B2D30] text-[#9DA0A8]">
         {/* 左侧操作按钮 */}
-        <div className="flex items-center space-x-0.5">
+        <div className="flex items-center shrink-0 space-x-0.5">
           {/* 回滚/撤销 */}
           <button 
             onClick={onRollbackSelected}
-            title="回滚更改 (Ctrl+Alt+Z)"
+            title={t('changes.rollback')}
             className="p-1 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
           >
             <RotateCcw className="w-3.5 h-3.5" />
@@ -515,7 +517,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
 
           {/* 刷新 */}
           <button 
-            title="刷新更改"
+            title={t('changes.refresh')}
             onClick={onRefresh}
             className="p-1 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
           >
@@ -526,7 +528,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
           <div className="relative">
             <button 
               onClick={() => setShowViewMenu(!showViewMenu)}
-              title="视图选项 (View Options)"
+              title={t('changes.viewOptions')}
               className="p-1 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
             >
               <Eye className="w-3.5 h-3.5" />
@@ -543,7 +545,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                     viewMode === 'tree' ? 'text-[#3574F0] font-semibold' : ''
                   }`}
                 >
-                  <span>树形结构 (Tree View)</span>
+                  <span>{t('changes.tree')}</span>
                   {viewMode === 'tree' && <Check className="w-3 h-3" />}
                 </button>
 
@@ -556,7 +558,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                     viewMode === 'flat' ? 'text-[#3574F0] font-semibold' : ''
                   }`}
                 >
-                  <span>扁平列表 (Flat List)</span>
+                  <span>{t('changes.flat')}</span>
                   {viewMode === 'flat' && <Check className="w-3 h-3" />}
                 </button>
 
@@ -569,7 +571,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                   }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#2E436E] flex items-center justify-between"
                 >
-                  <span>紧凑折叠空包路径</span>
+                  <span>{t('changes.compact')}</span>
                   {compactMiddleFolders && <Check className="w-3 h-3 text-[#3574F0]" />}
                 </button>
               </div>
@@ -578,29 +580,30 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
         </div>
 
         {/* 右侧：全部展开、全部折叠、更改列表下拉 */}
-        <div className="flex items-center space-x-1.5">
+        <div className="flex items-center min-w-0 gap-1">
           <button 
             onClick={expandAll}
-            title="全部展开"
-            className="p-1 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
+            title={t('changes.expandAll')}
+            className="p-1 shrink-0 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={collapseAll}
-            title="全部折叠"
-            className="p-1 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
+            title={t('changes.collapseAll')}
+            className="p-1 shrink-0 rounded hover:bg-[#35373C] hover:text-[#DFE1E5]"
           >
             <Minimize2 className="w-3.5 h-3.5" />
           </button>
 
-          <div className="flex items-center space-x-1 text-[11px] bg-[#1E1F22] border border-[#393B40] rounded px-1.5 py-0.5">
-            <span className="text-[#8C9099]">更改列表:</span>
+          <div className="flex items-center min-w-0 text-[11px] bg-[#1E1F22] border border-[#393B40] rounded px-1.5 py-0.5">
             <select
               value={activeList}
+              aria-label={t('changes.list')}
+              title={t('changes.list')}
               onChange={(e) => {
                 if (e.target.value === '__new__') {
-                  const name = prompt('新的更改列表名称：', '');
+                  const name = prompt(t('changes.newListPrompt'), '');
                   if (name && !changelistNames.includes(name)) persistLists([...changelistNames, name], assignments);
                   if (name) setActiveList(name);
                   return;
@@ -613,14 +616,14 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                 }
                 setActiveList(e.target.value);
               }}
-              className="bg-transparent border-none text-[#DFE1E5] focus:outline-none cursor-pointer font-medium max-w-[88px]"
+              className="bg-transparent border-none text-[#DFE1E5] focus:outline-none cursor-pointer font-medium w-[5.5rem] max-w-full min-w-0"
             >
-              <option value="全部" className="bg-[#2B2D30]">全部</option>
+              <option value="全部" className="bg-[#2B2D30]">{t('changes.all')}</option>
               {changelistNames.map(name => (
-                <option key={name} value={name} className="bg-[#2B2D30]">{name}</option>
+                <option key={name} value={name} className="bg-[#2B2D30]">{name === '更改' ? t('changes.default') : name}</option>
               ))}
-              <option value="__new__" className="bg-[#2B2D30]">新建列表...</option>
-              <option value="__move__" className="bg-[#2B2D30]">把当前文件移入此列表</option>
+              <option value="__new__" className="bg-[#2B2D30]">{t('changes.newList')}</option>
+              <option value="__move__" className="bg-[#2B2D30]">{t('changes.moveHere')}</option>
             </select>
           </div>
         </div>
@@ -639,7 +642,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                 {/* 分组头部 */}
                 <div
                   onClick={() => toggleExpand('untracked-root')}
-                  className={`flex items-center h-6 px-1 cursor-pointer transition-colors text-xs group ${
+                  className={`flex items-center h-6 min-w-0 overflow-hidden px-1 cursor-pointer transition-colors text-xs group ${
                     selectedKey === 'untracked-root' ? 'bg-[#2E436E] text-white' : 'hover:bg-[#2B2D30] text-[#9DA0A8]'
                   }`}
                 >
@@ -665,7 +668,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                       }
                     }}
                     className="w-3.5 h-3.5 mr-1.5 focus:outline-none flex items-center justify-center shrink-0"
-                    title={untrackedFiles.every(f => f.isStaged) ? "取消勾选未版本管理文件" : "勾选所有未版本管理文件准备提交"}
+                    title={untrackedFiles.every(f => f.isStaged) ? t('changes.unstageUnversioned') : t('changes.stageUnversioned')}
                   >
                     {renderCheckbox(
                       untrackedFiles.every(f => f.isStaged) ? 'checked' :
@@ -673,11 +676,11 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                     )}
                   </button>
 
-                  <span className="font-sans font-medium text-[#8C9099] mr-2">
-                    未进行版本管理的文件
+                  <span className="font-sans font-medium text-[#8C9099] mr-2 min-w-0 truncate">
+                    {t('changes.unversioned')}
                   </span>
-                  <span className="text-[11px] text-[#6F737A] font-mono">
-                    {untrackedFiles.length} 个文件
+                  <span className="text-[11px] text-[#6F737A] font-mono shrink-0 whitespace-nowrap">
+                    {t('changes.fileCount', { count: untrackedFiles.length })}
                   </span>
                 </div>
 
@@ -710,7 +713,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                     isSelected ? 'bg-[#2E436E] text-white' : 'hover:bg-[#2B2D30] text-[#DFE1E5]'
                   }`}
                 >
-                  <div className="flex items-center space-x-2 min-w-0 flex-1">
+                  <div className="flex items-center space-x-2 min-w-0 flex-1 overflow-hidden">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -721,7 +724,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                       {renderCheckbox(file.isStaged ? 'checked' : 'unchecked')}
                     </button>
                     {renderFileIcon(file.filename)}
-                    <FilePathDisplay path={file.path} className="flex-1" filenameClassName={fileStatusClass(file.status)} />
+                    <FilePathDisplay path={file.path} className="flex-1 min-w-0" filenameClassName={fileStatusClass(file.status)} />
                   </div>
                 </div>
               );
@@ -731,19 +734,19 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
       </div>
 
       {/* 底部统计栏 (对应截图左下角: "13 已修改") */}
-      <div className="h-6 px-3 border-t border-[#393B40] bg-[#2B2D30] flex items-center justify-between text-[11px] text-[#8C9099]">
-        <div className="flex items-center space-x-1.5 font-sans">
-          <span className="text-[#DFE1E5] font-medium">{trackedFiles.length} 已修改</span>
-          <span className="text-[#6F737A]">•</span>
-          <span className="text-[#3574F0] font-medium">已勾选 {changes.filter(c => c.isStaged).length} 个文件</span>
+      <div className="h-6 shrink-0 px-3 border-t border-[#393B40] bg-[#2B2D30] flex items-center justify-between gap-2 overflow-hidden text-[11px] text-[#8C9099]">
+        <div className="flex items-center min-w-0 space-x-1.5 font-sans overflow-hidden">
+          <span className="text-[#DFE1E5] font-medium shrink-0 whitespace-nowrap">{t('changes.modified', { count: trackedFiles.length })}</span>
+          <span className="text-[#6F737A] shrink-0">•</span>
+          <span className="text-[#3574F0] font-medium min-w-0 truncate">{t('changes.checked', { count: changes.filter(c => c.isStaged).length })}</span>
           {untrackedFiles.some(c => c.isStaged) && (
             <span className="text-amber-400 font-mono text-[10px]">
-              (含 {untrackedFiles.filter(c => c.isStaged).length} 个未版本管理文件)
+              {t('changes.includingUnversioned', { count: untrackedFiles.filter(c => c.isStaged).length })}
             </span>
           )}
         </div>
-        <div className="text-[10px] text-[#6F737A]">
-          {viewMode === 'tree' ? '树状视图' : '扁平视图'}
+        <div className="text-[10px] text-[#6F737A] shrink-0 whitespace-nowrap">
+          {viewMode === 'tree' ? t('changes.treeMode') : t('changes.flatMode')}
         </div>
       </div>
 
@@ -760,7 +763,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
             }}
             className="w-full text-left px-3 py-1.5 hover:bg-[#2E436E]"
           >
-            添加到 .gitignore
+            {t('changes.addGitignore')}
           </button>
           {!contextMenu.isFolder && contextMenu.file && (
             <button
@@ -768,13 +771,13 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                 const file = contextMenu.file;
                 setContextMenu(null);
                 if (!file) return;
-                if (confirm(`永久删除未版本管理文件「${file.path}」？此操作不可恢复。`)) {
+                if (confirm(t('changes.deleteConfirm', { path: file.path }))) {
                   onDeleteUnversioned?.(file);
                 }
               }}
               className="w-full text-left px-3 py-1.5 hover:bg-[#2E436E] text-[#E35967]"
             >
-              删除文件
+              {t('changes.deleteFile')}
             </button>
           )}
         </div>

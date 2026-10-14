@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { GitMerge, Save, X } from 'lucide-react';
 import { FilePathDisplay } from './common/FilePathDisplay';
 import { MergeViewer, type MergeViewerHandle, type MergeViewerStats } from './merge/MergeViewer';
+import { useI18n } from '../i18n/react';
 
 export interface ConflictFileRef {
   path: string;
@@ -38,6 +39,7 @@ export const ThreeWayMergeModal: React.FC<ThreeWayMergeModalProps> = ({
   onSave,
   onClose,
 }) => {
+  const { t } = useI18n();
   const viewerRef = useRef<MergeViewerHandle>(null);
   const [stats, setStats] = useState<MergeViewerStats>({ unresolved: 0, conflicts: 0, dirty: false });
   const dirtyRef = useRef(false);
@@ -47,7 +49,7 @@ export const ThreeWayMergeModal: React.FC<ThreeWayMergeModalProps> = ({
 
   const selectFile = (path: string) => {
     if (path === activePath) return;
-    if (dirtyRef.current && !confirm('当前文件的合并选择还没保存，切换后会丢失。继续？')) return;
+    if (dirtyRef.current && !confirm(t('merge.switchConfirm'))) return;
     onSelectFile(path);
   };
 
@@ -56,18 +58,18 @@ export const ThreeWayMergeModal: React.FC<ThreeWayMergeModalProps> = ({
       <div className="h-11 px-4 border-b border-jb-border flex items-center justify-between gap-3">
         <div className="flex items-center space-x-2 min-w-0">
           <GitMerge className="w-4 h-4 text-purple-400 shrink-0" />
-          <span className="font-semibold text-sm shrink-0">Resolve Conflicts</span>
-          <span className="text-jb-text-muted font-mono truncate">{activePath || '没有冲突文件'}</span>
+          <span className="font-semibold text-sm shrink-0">{t('merge.resolve')}</span>
+          <span className="text-jb-text-muted font-mono truncate">{activePath || t('merge.noFile')}</span>
         </div>
         <div className="flex items-center space-x-2 shrink-0">
           <button
             onClick={() => viewerRef.current?.save()}
             disabled={!activePath || loading}
-            title="Ctrl+S。仍有未处理冲突时会先确认"
+            title={t('merge.saveTitle')}
             className="px-3 py-1.5 rounded bg-jb-blue hover:bg-jb-blueHover text-white font-medium flex items-center space-x-1.5 disabled:opacity-40"
           >
             <Save className="w-3.5 h-3.5" />
-            <span>Save and Mark Resolved{stats.unresolved > 0 ? ` (${stats.unresolved})` : ''}</span>
+            <span>{t('merge.save')}{stats.unresolved > 0 ? ` (${stats.unresolved})` : ''}</span>
           </button>
           {!embedded && (
             <button onClick={onClose} className="p-1 rounded hover:bg-jb-hover text-jb-text-muted">
@@ -79,7 +81,7 @@ export const ThreeWayMergeModal: React.FC<ThreeWayMergeModalProps> = ({
 
       {files.length === 0 ? (
         <div className="flex-1 flex items-center justify-center text-sm text-jb-text-muted">
-          当前仓库没有未解决的冲突。合并或变基产生冲突后，这里会打开对应文件。
+          {t('merge.empty')}
         </div>
       ) : (
         <div className="flex-1 flex min-h-0">

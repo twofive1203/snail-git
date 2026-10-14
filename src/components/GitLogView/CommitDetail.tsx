@@ -10,6 +10,7 @@ import {
   ChevronUp,
   ChevronDown,
 } from 'lucide-react';
+import { useI18n } from '../../i18n/react';
 
 interface CommitDetailProps {
   commit: GitCommit | null;
@@ -64,6 +65,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
   onSelectParent,
   onCollapsedChange,
 }) => {
+  const { t } = useI18n();
   const [isTreeView, setIsTreeView] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [splitRatio, setSplitRatio] = useState(readSplitRatio);
@@ -104,7 +106,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
   if (!commit) {
     return (
       <div className="flex-1 h-full min-h-0 bg-[#1E1F22] flex items-center justify-center text-xs text-[#8C9099]">
-        选择一个提交以查看详细信息和修改文件
+        {t('detail.empty')}
       </div>
     );
   }
@@ -128,13 +130,13 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
         <div className="flex items-center space-x-2 truncate">
           <span className="font-mono text-blue-400 font-medium">{commit.shortHash}</span>
           <span className="text-[#DFE1E5] truncate font-medium">{commit.subject}</span>
-          <span className="text-[#8C9099] text-[11px]">({commit.files.length} 个文件)</span>
+          <span className="text-[#8C9099] text-[11px]">{t('detail.files', { count: commit.files.length })}</span>
         </div>
         <button
           onClick={() => setIsCollapsed(false)}
           className="flex items-center space-x-1 text-[#8C9099] hover:text-[#DFE1E5] px-1.5 py-0.5 rounded hover:bg-[#2B2D30] text-[11px]"
         >
-          <span>展开详情</span>
+          <span>{t('detail.expand')}</span>
           <ChevronUp className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -155,7 +157,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
               </div>
               <button
                 onClick={() => setIsCollapsed(true)}
-                title="折叠详情面板"
+                title={t('detail.collapse')}
                 className="p-1 rounded text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#2B2D30] shrink-0"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
@@ -170,26 +172,26 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
 
             <div className="space-y-1 text-jb-text-muted pt-1 text-[11px] font-mono">
               <div className="flex items-center space-x-2">
-                <span className="w-16 text-jb-text-secondary">Author:</span>
+                <span className="w-16 text-jb-text-secondary">{t('detail.author')}</span>
                 <span className="text-jb-text-primary">{commit.author} &lt;{commit.authorEmail}&gt;</span>
               </div>
               <div className="flex items-center space-x-2">
-                <span className="w-16 text-jb-text-secondary">Date:</span>
+                <span className="w-16 text-jb-text-secondary">{t('detail.date')}</span>
                 <span className="text-jb-text-primary">{commit.date} ({commit.relativeDate})</span>
               </div>
               <div className="flex items-center space-x-2">
-                <span className="w-16 text-jb-text-secondary">Commit:</span>
+                <span className="w-16 text-jb-text-secondary">{t('detail.commit')}</span>
                 <span className="text-jb-blue">{commit.hash}</span>
               </div>
               {commit.parents.length > 0 && (
                 <div className="flex items-center space-x-2">
-                  <span className="w-16 text-jb-text-secondary">Parents:</span>
+                  <span className="w-16 text-jb-text-secondary">{t('detail.parents')}</span>
                   <div className="flex space-x-1.5">
                     {commit.parents.map(p => (
                       <button
                         key={p}
                         onClick={() => onSelectParent?.(p)}
-                        title={`跳转到父提交 ${p}`}
+                        title={t('detail.gotoParent', { hash: p })}
                         className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 hover:underline"
                       >
                         {p.slice(0, 8)}
@@ -206,7 +208,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
           role="separator"
           aria-orientation="vertical"
           aria-valuenow={Math.round(splitRatio * 100)}
-          title="拖拽调整左右宽度"
+          title={t('detail.dragWidth')}
           onMouseDown={startDrag}
           className="w-1.5 shrink-0 cursor-col-resize bg-[#303236] hover:bg-[#3574F0] active:bg-[#3574F0]"
         />
@@ -214,7 +216,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
         <div className="flex-1 min-w-0 flex flex-col bg-jb-bg/40">
           <div className="h-8 px-3 border-b border-jb-border flex items-center justify-between bg-jb-panel/80">
             <div className="flex items-center space-x-2">
-              <span className="font-semibold text-jb-text-primary">Changed Files</span>
+              <span className="font-semibold text-jb-text-primary">{t('detail.changedFiles')}</span>
               <span className="px-1.5 py-0.2 bg-jb-bg rounded-full text-[10px] text-jb-text-muted font-mono border border-jb-border">
                 {commit.files.length}
               </span>
@@ -223,7 +225,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
             <div className="flex items-center space-x-1">
               <button
                 onClick={() => setIsTreeView(!isTreeView)}
-                title={isTreeView ? "切换到扁平列表" : "切换到目录树"}
+                title={isTreeView ? t('detail.toFlat') : t('detail.toTree')}
                 className="p-1 rounded hover:bg-jb-hover text-jb-text-secondary"
               >
                 {isTreeView ? <List className="w-3.5 h-3.5" /> : <FolderTree className="w-3.5 h-3.5" />}
@@ -259,7 +261,7 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
                     <span className="text-jb-red">-{file.deletions}</span>
                   )}
                   <button 
-                    title="查看该提交的 Diff"
+                    title={t('detail.viewDiff')}
                     onClick={(e) => {
                       e.stopPropagation();
                       onOpenFileDiff(file.path);

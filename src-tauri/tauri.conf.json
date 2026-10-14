@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "EasyGit - IDEA Style Git Manager",
+        "title": "EasyGit - 极致轻量级 IDEA 风格 Git 管理器",
         "create": false,
         "width": 1280,
         "height": 820,

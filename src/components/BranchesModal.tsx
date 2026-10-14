@@ -15,6 +15,7 @@ import {
   ExternalLink,
   ChevronRight
 } from 'lucide-react';
+import { useI18n } from '../i18n/react';
 
 interface BranchesModalProps {
   isOpen: boolean;
@@ -47,6 +48,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
   onToggleFavorite,
   embedded = false,
 }) => {
+  const { t } = useI18n();
   const [search, setSearch] = useState('');
   const [selectedBranchForAction, setSelectedBranchForAction] = useState<GitBranch | null>(null);
 
@@ -74,7 +76,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
               <BranchIcon className="w-4 h-4 text-jb-blue" />
-              <span className="font-semibold text-sm text-jb-text-primary">Git Branches</span>
+              <span className="font-semibold text-sm text-jb-text-primary">{t('branches.title')}</span>
             </div>
             {!embedded && (
             <button 
@@ -93,7 +95,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
               autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search branch name..."
+              placeholder={t('branches.search')}
               className="w-full bg-jb-bg border border-jb-border rounded pl-8 pr-3 py-1.5 text-xs text-jb-text-primary placeholder-jb-text-muted focus:outline-none focus:border-jb-blue transition-colors"
             />
           </div>
@@ -103,13 +105,13 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
         <div className="px-3 py-2 border-b border-jb-border bg-jb-bg/40">
           <button 
             onClick={() => {
-              const name = prompt('输入新分支名称：', 'feature/');
+              const name = prompt(t('branches.newPrompt'), 'feature/');
               if (name) onCreateBranch?.(name);
             }}
             className="w-full flex items-center justify-center space-x-1.5 py-1.5 rounded bg-jb-blue/15 hover:bg-jb-blue/25 text-jb-blue border border-jb-blue/30 font-medium transition-colors"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>New Branch from '{currentBranch}'...</span>
+            <span>{t('branches.newFrom', { branch: currentBranch })}</span>
           </button>
         </div>
 
@@ -118,7 +120,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
           {/* 本地分支 */}
           <div>
             <div className="text-[11px] font-semibold text-jb-text-muted px-2 py-1 uppercase tracking-wider">
-              Local Branches ({localBranches.length})
+              {t('branches.local', { count: localBranches.length })}
             </div>
             <div className="space-y-0.5 mt-0.5">
               {localBranches.map(branch => {
@@ -162,7 +164,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
           {remoteBranches.length > 0 && (
             <div>
               <div className="text-[11px] font-semibold text-jb-text-muted px-2 py-1 uppercase tracking-wider">
-                Remote Branches ({remoteBranches.length})
+                {t('branches.remote', { count: remoteBranches.length })}
               </div>
               <div className="space-y-0.5 mt-0.5">
                 {remoteBranches.map(branch => (
@@ -194,7 +196,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                 onClick={() => setSelectedBranchForAction(null)}
                 className="text-jb-text-muted hover:text-jb-text-primary text-[11px]"
               >
-                Cancel
+                {t('branches.cancel')}
               </button>
             </div>
 
@@ -205,7 +207,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <Check className="w-3.5 h-3.5 text-jb-green" />
-                <span>Checkout</span>
+                <span>{t('branches.checkout')}</span>
               </button>
 
               <button
@@ -216,7 +218,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary"
               >
                 <GitMerge className="w-3.5 h-3.5 text-jb-blue" />
-                <span>Merge into '{currentBranch}'</span>
+                <span>{t('branches.mergeInto', { branch: currentBranch })}</span>
               </button>
 
               <button
@@ -227,7 +229,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary"
               >
                 <GitPullRequest className="w-3.5 h-3.5 text-purple-400" />
-                <span>Rebase onto this</span>
+                <span>{t('branches.rebaseOnto')}</span>
               </button>
 
               <button
@@ -236,11 +238,11 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                   finish();
                 }}
                 disabled={selectedBranchForAction.name === currentBranch}
-                title="列出该分支与当前分支的全部差异文件，可双击查看双栏 Diff"
+                title={t('branches.compareTitle')}
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <Layers className="w-3.5 h-3.5 text-amber-400" />
-                <span>Compare with Current</span>
+                <span>{t('branches.compare')}</span>
               </button>
 
               <button
@@ -249,7 +251,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary disabled:opacity-30"
               >
                 <Scissors className="w-3.5 h-3.5 text-jb-text-muted" />
-                <span>Rename</span>
+                <span>{t('branches.rename')}</span>
               </button>
 
               <button
@@ -257,7 +259,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-jb-text-primary"
               >
                 <Star className={`w-3.5 h-3.5 ${selectedBranchForAction.isFavorite ? 'text-amber-400 fill-amber-400' : 'text-jb-text-muted'}`} />
-                <span>{selectedBranchForAction.isFavorite ? 'Unfavorite' : 'Favorite'}</span>
+                <span>{selectedBranchForAction.isFavorite ? t('branches.unfavorite') : t('branches.favorite')}</span>
               </button>
 
               <button
@@ -266,7 +268,7 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
                 className="px-2.5 py-1.5 rounded bg-jb-panel hover:bg-jb-hover border border-jb-border flex items-center space-x-1.5 text-rose-300 disabled:opacity-30"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>{selectedBranchForAction.isRemote ? 'Delete Remote' : 'Delete'}</span>
+                <span>{selectedBranchForAction.isRemote ? t('branches.deleteRemote') : t('branches.delete')}</span>
               </button>
             </div>
           </div>

@@ -10,6 +10,7 @@ import {
   Globe
 } from 'lucide-react';
 import { isTauriEnvironment } from '../services/gitService';
+import { useI18n } from '../i18n/react';
 
 export type ActiveTab = 'log' | 'commit' | 'branches' | 'shelf' | 'merge';
 
@@ -24,37 +25,38 @@ export const TabBar: React.FC<TabBarProps> = ({
   activeTab,
   onTabChange,
   changesCount,
-  gitVersion = '未连接 Git',
+  gitVersion = '',
 }) => {
+  const { t } = useI18n();
   const tabs = [
     { 
       id: 'log' as ActiveTab, 
-      label: 'Git Log', 
+      label: t('tab.gitLog'), 
       shortcut: 'Alt+9', 
       icon: GitGraph 
     },
     { 
       id: 'commit' as ActiveTab, 
-      label: 'Commit & Diff', 
+      label: t('tab.commit'), 
       shortcut: 'Alt+0', 
       icon: CheckSquare,
       badge: changesCount > 0 ? changesCount : undefined 
     },
     { 
       id: 'branches' as ActiveTab, 
-      label: 'Branches', 
+      label: t('tab.branches'), 
       shortcut: '', 
       icon: GitFork 
     },
     { 
       id: 'shelf' as ActiveTab, 
-      label: 'Shelf & Stash', 
+      label: t('tab.shelf'), 
       shortcut: '', 
       icon: Archive 
     },
     { 
       id: 'merge' as ActiveTab, 
-      label: '3-Way Merge (冲突解决)', 
+      label: t('tab.merge'), 
       shortcut: '', 
       icon: GitMerge,
       highlight: true
@@ -98,10 +100,10 @@ export const TabBar: React.FC<TabBarProps> = ({
         <span className="flex items-center space-x-1.5 font-mono text-[11px]">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span className="text-[#DFE1E5]">
-            {isTauriEnvironment() ? 'Tauri 2.0 Native' : gitVersion}
+            {isTauriEnvironment() ? t('tab.native') : (gitVersion || t('status.notConnected'))}
           </span>
           <span className="text-[10px] text-[#6F737A] bg-[#1E1F22] px-1 rounded border border-[#393B40]">
-            {isTauriEnvironment() ? 'Desktop' : 'Web'}
+            {isTauriEnvironment() ? t('tab.desktop') : t('tab.web')}
           </span>
         </span>
       </div>

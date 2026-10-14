@@ -3,6 +3,7 @@ import { DiffChunk, RevisionFile } from '../types/git';
 import { SideBySideDiff } from './CommitView/SideBySideDiff';
 import { FilePathDisplay } from './common/FilePathDisplay';
 import { X } from 'lucide-react';
+import { useI18n } from '../i18n/react';
 
 interface DiffModalProps {
   title: string;
@@ -12,6 +13,7 @@ interface DiffModalProps {
 }
 
 export const DiffModal: React.FC<DiffModalProps> = ({ title, files, onLoad, onClose }) => {
+  const { t } = useI18n();
   const [selected, setSelected] = useState(files[0]?.path || '');
   const [chunks, setChunks] = useState<DiffChunk[]>([]);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
@@ -45,8 +47,8 @@ export const DiffModal: React.FC<DiffModalProps> = ({ title, files, onLoad, onCl
         </div>
         <div className="flex-1 flex min-h-0">
           <div className="w-72 border-r border-jb-border overflow-auto p-1 text-xs">
-            {files.length === 0 && <div className="p-3 text-jb-text-muted">没有差异文件</div>}
-            <div className="px-2 py-1 text-[10px] text-jb-text-muted">单击或双击查看双栏 Diff</div>
+            {files.length === 0 && <div className="p-3 text-jb-text-muted">{t('diff.empty')}</div>}
+            <div className="px-2 py-1 text-[10px] text-jb-text-muted">{t('diff.openHint')}</div>
             {files.map(file => (
               <div
                 key={file.path}
@@ -57,7 +59,7 @@ export const DiffModal: React.FC<DiffModalProps> = ({ title, files, onLoad, onCl
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') setSelected(file.path);
                 }}
-                title="单击或双击查看双栏 Diff"
+                title={t('diff.openHint')}
                 className={`w-full text-left px-2 py-1.5 rounded cursor-pointer ${file.path === current?.path ? 'bg-jb-selected text-white' : 'hover:bg-jb-hover'}`}
               >
                 <FilePathDisplay path={file.path} />
