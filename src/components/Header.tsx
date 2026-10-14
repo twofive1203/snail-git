@@ -27,6 +27,8 @@ interface HeaderProps {
   aheadCount?: number;
   behindCount?: number;
   memoryMb?: number;
+  busyLabel?: string | null;
+  operationsLocked?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -43,7 +45,10 @@ export const Header: React.FC<HeaderProps> = ({
   aheadCount = 0,
   behindCount = 0,
   memoryMb,
+  busyLabel,
+  operationsLocked = false,
 }) => {
+  const lockClass = operationsLocked ? 'opacity-50 cursor-not-allowed' : '';
   return (
     <header className="h-11 bg-jb-panel border-b border-jb-border flex items-center justify-between px-3 select-none text-xs">
       {/* 左侧：Logo 与仓库路径 */}
@@ -75,8 +80,9 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Update Project (Ctrl+T) */}
         <button 
           onClick={onUpdateClick}
-          title="Update Project (Ctrl+T) - 拉取远程更新并合并/变基"
-          className="flex items-center space-x-1 px-2 py-1 rounded hover:bg-jb-hover text-jb-text-primary transition-colors"
+          disabled={operationsLocked}
+          title="Update Project (Ctrl+T) - 先拉取远程，再按仓库的 pull.rebase 合并或变基"
+          className={`flex items-center space-x-1 px-2 py-1 rounded hover:bg-jb-hover text-jb-text-primary transition-colors ${lockClass}`}
         >
           <ArrowDownToLine className="w-3.5 h-3.5 text-jb-blue" />
           <span className="hidden sm:inline">Update</span>
@@ -95,8 +101,9 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Push... (Ctrl+Shift+K) */}
         <button 
           onClick={onPushClick}
-          title="Push... (Ctrl+Shift+K) - 推送本地提交到远程分支"
-          className="flex items-center space-x-1 px-2 py-1 rounded hover:bg-jb-hover text-jb-text-primary transition-colors"
+          disabled={operationsLocked}
+          title="Push (Ctrl+Shift+K) - 推送本地提交。没有上游时会先确认目标"
+          className={`flex items-center space-x-1 px-2 py-1 rounded hover:bg-jb-hover text-jb-text-primary transition-colors ${lockClass}`}
         >
           <ArrowUpFromLine className="w-3.5 h-3.5 text-indigo-400" />
           <span className="hidden sm:inline">Push</span>
@@ -107,16 +114,18 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Fetch */}
         <button 
           onClick={onFetchClick}
+          disabled={operationsLocked}
           title="Fetch - 刷新所有远程分支状态"
-          className="p-1.5 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors"
+          className={`p-1.5 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors ${lockClass}`}
         >
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
 
         <button 
           onClick={onRollbackClick}
+          disabled={operationsLocked}
           title="Rollback - 撤销全部工作区更改"
-          className="p-1.5 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors"
+          className={`p-1.5 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors ${lockClass}`}
         >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
@@ -130,6 +139,15 @@ export const Header: React.FC<HeaderProps> = ({
           <Layers className="w-3.5 h-3.5 text-jb-orange" />
           <span className="hidden md:inline">Shelf</span>
         </button>
+
+        {busyLabel && (
+          <span
+            className="max-w-[240px] truncate px-1.5 text-[11px] text-jb-text-muted"
+            title="正在连接远程，若弹出登录窗口请完成登录"
+          >
+            {busyLabel}
+          </span>
+        )}
       </div>
 
       {/* 右侧：内存监控状态 & 分支切换入口小部件 */}

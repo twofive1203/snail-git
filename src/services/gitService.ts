@@ -74,6 +74,33 @@ export async function listenGitChanged(cb: (path: string) => void): Promise<() =
   return () => unlisten();
 }
 
+export interface GitProgress {
+  repoPath: string;
+  line: string;
+}
+
+export interface SyncOutcome {
+  status: 'ok' | 'up_to_date' | 'needs_confirm' | string;
+  message: string;
+  ahead: number;
+  behind: number;
+  remote: string;
+  branch: string;
+  conflictingPaths: string[];
+}
+
+export async function listenGitProgress(cb: (event: GitProgress) => void): Promise<() => void> {
+  if (!isTauriEnvironment()) return () => undefined;
+  const { listen } = await import('@tauri-apps/api/event');
+  const unlisten = await listen<GitProgress>('git-progress', (event) => cb(event.payload));
+  return () => unlisten();
+}
+
+export async function setWatchPaused(paused: boolean): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  await invokeTauri('set_watch_paused', { paused });
+}
+
 export async function loadFileDiff(repoPath: string, path: string, ignoreWhitespace = false): Promise<DiffChunk[]> {
   return invokeTauri<DiffChunk[]>('load_file_diff', { repoPath, path, ignoreWs: ignoreWhitespace });
 }
@@ -114,12 +141,12 @@ export async function rebaseOnto(repoPath: string, name: string): Promise<string
   return invokeTauri<string>('rebase_onto', { repoPath, name });
 }
 
-export async function pullRepo(repoPath: string): Promise<string> {
-  return invokeTauri<string>('pull_repo', { repoPath });
+export async function updateRepo(repoPath: string, confirmRisk: boolean): Promise<SyncOutcome> {
+  return invokeTauri<SyncOutcome>('update_repo', { repoPath, confirmRisk });
 }
 
-export async function pushRepo(repoPath: string): Promise<string> {
-  return invokeTauri<string>('push_repo', { repoPath });
+export async function pushRepo(repoPath: string, allowSetUpstream = false): Promise<SyncOutcome> {
+  return invokeTauri<SyncOutcome>('push_repo', { repoPath, allowSetUpstream });
 }
 
 export async function stashSave(repoPath: string, message: string): Promise<string> {

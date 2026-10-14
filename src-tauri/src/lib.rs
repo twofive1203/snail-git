@@ -172,14 +172,44 @@ fn rebase_onto(repo_path: String, name: String) -> Result<String, String> {
     git_ops::rebase_onto(&repo_path, &name)
 }
 
-#[tauri::command]
-fn pull_repo(repo_path: String) -> Result<String, String> {
-    git_ops::pull(&repo_path)
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitProgressEvent {
+    repo_path: String,
+    line: String,
+}
+
+fn emit_git_progress(app: &AppHandle, repo_path: &str, line: &str) {
+    let _ = app.emit(
+        "git-progress",
+        GitProgressEvent {
+            repo_path: repo_path.to_string(),
+            line: line.to_string(),
+        },
+    );
 }
 
 #[tauri::command]
-fn push_repo(repo_path: String) -> Result<String, String> {
-    git_ops::push(&repo_path)
+fn update_repo(app: AppHandle, repo_path: String, confirm_risk: bool) -> Result<git_ops::SyncOutcome, String> {
+    let repo = repo_path.clone();
+    git_ops::update_repo(&repo_path, confirm_risk, &mut |line| emit_git_progress(&app, &repo, line))
+}
+
+#[tauri::command]
+fn push_repo(app: AppHandle, repo_path: String, allow_set_upstream: bool) -> Result<git_ops::SyncOutcome, String> {
+    let repo = repo_path.clone();
+    git_ops::push_repo(&repo_path, allow_set_upstream, &mut |line| {
+        emit_git_progress(&app, &repo, line)
+    })
+}
+
+#[tauri::command]
+fn set_watch_paused(paused: bool) {
+    if paused {
+        git_ops::pause_watch();
+    } else {
+        git_ops::resume_watch();
+    }
 }
 
 #[tauri::command]
@@ -238,8 +268,9 @@ fn pick_directory() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn fetch_repo(repo_path: String) -> Result<String, String> {
-    git_ops::fetch_repo(&repo_path)
+fn fetch_repo(app: AppHandle, repo_path: String) -> Result<String, String> {
+    let repo = repo_path.clone();
+    git_ops::fetch_repo(&repo_path, &mut |line| emit_git_progress(&app, &repo, line))
 }
 
 #[tauri::command]
@@ -318,7 +349,7 @@ fn watch_loop(app: AppHandle) {
     loop {
         std::thread::sleep(Duration::from_millis(2500));
         let path = WATCH_PATH.lock().map(|g| g.clone()).unwrap_or_default();
-        if path.is_empty() {
+        if path.is_empty() || git_ops::watch_paused() {
             continue;
         }
         // 失败时保留上次签名。大仓库上 status 超时若被当成“变了”，会和成功结果来回触发全量刷新。
@@ -420,8 +451,9 @@ pub fn run() {
             create_branch,
             merge_branch,
             rebase_onto,
-            pull_repo,
+            update_repo,
             push_repo,
+            set_watch_paused,
             stash_save,
             stash_apply,
             stash_drop,

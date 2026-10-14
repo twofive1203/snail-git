@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -12,6 +14,38 @@ static GIT_SLOT: Mutex<()> = Mutex::new(());
 
 pub fn acquire_git_slot() -> std::sync::MutexGuard<'static, ()> {
     GIT_SLOT.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+/// 网络操作期间暂停状态轮询，避免 `git status` 在锁后面空等整次 fetch/push。
+static WATCH_PAUSE: AtomicU32 = AtomicU32::new(0);
+
+pub fn pause_watch() {
+    WATCH_PAUSE.fetch_add(1, Ordering::SeqCst);
+}
+
+pub fn resume_watch() {
+    let _ = WATCH_PAUSE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+        Some(value.saturating_sub(1))
+    });
+}
+
+pub fn watch_paused() -> bool {
+    WATCH_PAUSE.load(Ordering::SeqCst) > 0
+}
+
+struct WatchPauseGuard;
+
+impl WatchPauseGuard {
+    fn new() -> Self {
+        pause_watch();
+        Self
+    }
+}
+
+impl Drop for WatchPauseGuard {
+    fn drop(&mut self) {
+        resume_watch();
+    }
 }
 
 fn hide_console(cmd: &mut Command) {
@@ -432,6 +466,248 @@ fn output_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String>
             Err(e) => return Err(e.to_string()),
         }
     }
+}
+
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(90);
+const NETWORK_STALL: Duration = Duration::from_secs(30);
+const LOGIN_HINT: &str = "请先在终端完成登录后再试。";
+const STALL_HINT: &str = "连接远程没有响应。若需要登录，请先在终端完成凭据登录后再试。";
+
+fn git_network(cwd: &str) -> Command {
+    let mut cmd = git_base(cwd);
+    // 意外打开编辑器会在无窗口进程里卡住。合并已带 --no-edit，这里再失败快速退出。
+    cmd.env("GIT_EDITOR", "false").env("GIT_MERGE_AUTOEDIT", "no");
+    cmd
+}
+
+fn pump_pipe(mut pipe: impl Read, kind: u8, tx: mpsc::Sender<(u8, Vec<u8>)>) {
+    let mut buf = [0u8; 1024];
+    loop {
+        match pipe.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if tx.send((kind, buf[..n].to_vec())).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn consider_progress(
+    line: &str,
+    last_emit: &mut Instant,
+    last_line: &mut String,
+    on_line: &mut dyn FnMut(&str),
+    force: bool,
+) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    *last_line = line.to_string();
+    let lower = line.to_ascii_lowercase();
+    let urgent = lower.contains("fatal") || lower.contains("error") || lower.contains("denied");
+    if force || urgent || last_emit.elapsed() >= Duration::from_millis(200) {
+        *last_emit = Instant::now();
+        on_line(line);
+    }
+}
+
+fn drain_progress(
+    buf: &mut String,
+    last_emit: &mut Instant,
+    last_line: &mut String,
+    on_line: &mut dyn FnMut(&str),
+) {
+    while let Some(idx) = buf.find(['\n', '\r']) {
+        let line = buf[..idx].to_string();
+        buf.drain(..=idx);
+        consider_progress(&line, last_emit, last_line, on_line, false);
+    }
+}
+
+/// 有进度就把总超时放宽到 90 秒；完全没输出超过 30 秒视为凭据或连接挂起，不再等满 60 秒。
+fn run_git_streaming(
+    cwd: &str,
+    args: &[&str],
+    timeout: Duration,
+    stall: Option<Duration>,
+    on_line: &mut dyn FnMut(&str),
+) -> Result<Output, String> {
+    let _slot = acquire_git_slot();
+    let mut cmd = git_network(cwd);
+    cmd.args(args);
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法启动 git：{e}。请确认已安装 Git 并加入 PATH。"))?;
+
+    let stdout_pipe = child.stdout.take().unwrap();
+    let stderr_pipe = child.stderr.take().unwrap();
+    let (tx, rx) = mpsc::channel::<(u8, Vec<u8>)>();
+    let err_tx = tx.clone();
+    let out_handle = std::thread::spawn(move || pump_pipe(stdout_pipe, 0, tx));
+    let err_handle = std::thread::spawn(move || pump_pipe(stderr_pipe, 1, err_tx));
+
+    let start = Instant::now();
+    let mut last_output = Instant::now();
+    let mut last_emit = start - Duration::from_secs(1);
+    let mut last_line = String::new();
+    let mut pending_err = String::new();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut out_handle = Some(out_handle);
+    let mut err_handle = Some(err_handle);
+
+    let apply_chunk = |kind: u8,
+                       chunk: Vec<u8>,
+                       last_output: &mut Instant,
+                       pending_err: &mut String,
+                       stdout: &mut Vec<u8>,
+                       stderr: &mut Vec<u8>,
+                       last_emit: &mut Instant,
+                       last_line: &mut String,
+                       on_line: &mut dyn FnMut(&str)| {
+        *last_output = Instant::now();
+        if kind == 1 {
+            pending_err.push_str(&String::from_utf8_lossy(&chunk));
+            stderr.extend_from_slice(&chunk);
+            drain_progress(pending_err, last_emit, last_line, on_line);
+        } else {
+            stdout.extend_from_slice(&chunk);
+        }
+    };
+    let stop_child = |child: &mut Child,
+                      out_handle: &mut Option<std::thread::JoinHandle<()>>,
+                      err_handle: &mut Option<std::thread::JoinHandle<()>>| {
+        let _ = child.kill();
+        let _ = child.wait();
+        if let Some(handle) = out_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = err_handle.take() {
+            let _ = handle.join();
+        }
+    };
+
+    let status = loop {
+        while let Ok((kind, chunk)) = rx.try_recv() {
+            apply_chunk(
+                kind,
+                chunk,
+                &mut last_output,
+                &mut pending_err,
+                &mut stdout,
+                &mut stderr,
+                &mut last_emit,
+                &mut last_line,
+                on_line,
+            );
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if stall.is_some_and(|limit| last_output.elapsed() > limit) => {
+                stop_child(&mut child, &mut out_handle, &mut err_handle);
+                return Err(STALL_HINT.into());
+            }
+            Ok(None) if start.elapsed() > timeout => {
+                stop_child(&mut child, &mut out_handle, &mut err_handle);
+                return Err("Git 命令超时。传输时间过长，已中止，请稍后重试。".into());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(40)),
+            Err(err) => {
+                stop_child(&mut child, &mut out_handle, &mut err_handle);
+                return Err(err.to_string());
+            }
+        }
+    };
+    if let Some(handle) = out_handle.take() {
+        let _ = handle.join();
+    }
+    if let Some(handle) = err_handle.take() {
+        let _ = handle.join();
+    }
+    while let Ok((kind, chunk)) = rx.try_recv() {
+        apply_chunk(
+            kind,
+            chunk,
+            &mut last_output,
+            &mut pending_err,
+            &mut stdout,
+            &mut stderr,
+            &mut last_emit,
+            &mut last_line,
+            on_line,
+        );
+    }
+    if !pending_err.trim().is_empty() {
+        consider_progress(&pending_err, &mut last_emit, &mut last_line, on_line, true);
+    } else if !last_line.is_empty() {
+        consider_progress(&last_line.clone(), &mut last_emit, &mut last_line, on_line, true);
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn auth_hint(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    const MARKERS: &[&str] = &[
+        "authentication failed",
+        "could not read username",
+        "could not read password",
+        "terminal prompts disabled",
+        "permission denied (publickey)",
+        "invalid username or password",
+        "http basic: access denied",
+        "requested url returned error: 401",
+        "requested url returned error: 403",
+        "support for password authentication was removed",
+        "authentication required",
+        "could not read from remote repository",
+        "please make sure you have the correct access rights",
+    ];
+    if MARKERS.iter().any(|marker| lower.contains(marker)) {
+        Some(LOGIN_HINT)
+    } else {
+        None
+    }
+}
+
+fn finish_network(output: &Output, action: &str) -> Result<String, String> {
+    let err = lossy(&output.stderr);
+    let out = lossy(&output.stdout);
+    if output.status.success() {
+        return Ok(if out.is_empty() { err } else { out });
+    }
+    let msg = if err.is_empty() { out } else { err };
+    if let Some(hint) = auth_hint(&msg) {
+        return Err(hint.into());
+    }
+    let rejected = {
+        let lower = msg.to_ascii_lowercase();
+        lower.contains("non-fast-forward") || lower.contains("[rejected]") || lower.contains("failed to push")
+    };
+    if rejected {
+        return Err(format!("推送被拒绝。远程有本地没有的提交，请先 Update。\n{msg}"));
+    }
+    Err(if msg.is_empty() {
+        format!("{action}失败")
+    } else {
+        format!("{action}失败：{msg}")
+    })
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn ensure_ok(output: &Output, action: &str) -> Result<String, String> {
@@ -1521,9 +1797,13 @@ pub fn commit(repo: &str, message: &str, amend: bool, and_push: bool) -> Result<
     let output = run_git(&top, &args, Duration::from_secs(30))?;
     let text = ensure_ok(&output, "提交")?;
     if and_push {
-        let push = push(&top);
-        match push {
-            Ok(pushed) => return Ok(format!("{text}\n{pushed}")),
+        match push_repo(&top, false, &mut |_| {}) {
+            Ok(outcome) if outcome.status == "needs_confirm" => {
+                return Ok(format!(
+                    "提交已写入，但当前分支没有上游，未自动推送。请用顶部 Push 确认目标。\n{text}"
+                ));
+            }
+            Ok(outcome) => return Ok(format!("{text}\n{}", outcome.message)),
             Err(err) => return Err(format!("提交已写入，但推送失败：{err}")),
         }
     }
@@ -1595,30 +1875,342 @@ pub fn rebase_onto(repo: &str, name: &str) -> Result<String, String> {
     ensure_ok(&output, "变基")
 }
 
-pub fn pull(repo: &str) -> Result<String, String> {
-    let top = validate_repo(repo)?;
-    let output = run_git(&top, &["pull", "--no-edit"], Duration::from_secs(60))?;
-    ensure_ok(&output, "拉取")
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncOutcome {
+    pub status: String,
+    pub message: String,
+    pub ahead: u32,
+    pub behind: u32,
+    pub remote: String,
+    pub branch: String,
+    pub conflicting_paths: Vec<String>,
 }
 
-pub fn push(repo: &str) -> Result<String, String> {
-    let top = validate_repo(repo)?;
-    let upstream = run_git(
-        &top,
+fn sync_outcome(
+    status: &str,
+    message: impl Into<String>,
+    ahead: u32,
+    behind: u32,
+    remote: &str,
+    branch: &str,
+    conflicting_paths: Vec<String>,
+) -> SyncOutcome {
+    SyncOutcome {
+        status: status.into(),
+        message: message.into(),
+        ahead,
+        behind,
+        remote: remote.into(),
+        branch: branch.into(),
+        conflicting_paths,
+    }
+}
+
+fn upstream_ref(repo: &str) -> Option<String> {
+    let output = run_git(
+        repo,
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
         Duration::from_secs(8),
-    );
-    let has_upstream = upstream.map(|o| o.status.success()).unwrap_or(false);
-    let output = if has_upstream {
-        run_git(&top, &["push"], Duration::from_secs(60))?
+    )
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = lossy(&output.stdout);
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn config_get(repo: &str, key: &str) -> Option<String> {
+    let output = run_git(repo, &["config", "--get", key], Duration::from_secs(8)).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = lossy(&output.stdout);
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn remotes(repo: &str) -> Result<Vec<String>, String> {
+    let output = run_git(repo, &["remote"], Duration::from_secs(8))?;
+    let text = ensure_ok(&output, "读取远程")?;
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn choose_remote(repo: &str, branch: &str) -> Result<String, String> {
+    let key = format!("branch.{branch}.remote");
+    if let Some(remote) = config_get(repo, &key) {
+        return Ok(remote);
+    }
+    let remotes = remotes(repo)?;
+    if remotes.iter().any(|remote| remote == "origin") {
+        return Ok("origin".into());
+    }
+    remotes.into_iter().next().ok_or_else(|| "没有配置远程仓库".to_string())
+}
+
+fn require_branch(repo: &str) -> Result<(String, String), String> {
+    let (branch, head) = current_branch(repo)?;
+    if branch == "HEAD" || head.is_empty() {
+        return Err("当前是分离头指针或还没有提交，不能更新或推送。".into());
+    }
+    Ok((branch, head))
+}
+
+fn integrate_strategy(value: Option<&str>) -> Result<&'static str, String> {
+    match value.unwrap_or("false").trim() {
+        "" | "false" => Ok("merge"),
+        "true" => Ok("rebase"),
+        "merges" => Ok("rebase-merges"),
+        "interactive" => Err("当前 pull.rebase=interactive，无法在无终端里变基。请改成 true 或 false。".into()),
+        other => Err(format!("不支持的 pull.rebase 配置：{other}")),
+    }
+}
+
+fn normalize_git_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn overlapping_paths(dirty: &[String], incoming: &[String]) -> Vec<String> {
+    let incoming: std::collections::HashSet<String> = incoming.iter().map(|path| normalize_git_path(path)).collect();
+    let mut found: Vec<String> = dirty
+        .iter()
+        .filter(|path| incoming.contains(&normalize_git_path(path)))
+        .map(|path| normalize_git_path(path))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn join_limited(paths: &[String]) -> String {
+    const MAX: usize = 6;
+    if paths.len() <= MAX {
+        paths.join("、")
     } else {
-        let (branch, _) = current_branch(&top)?;
-        if branch == "HEAD" {
-            return Err("当前是分离头指针，不能推送。".into());
+        format!("{} 等 {} 个文件", paths[..MAX].join("、"), paths.len())
+    }
+}
+
+struct DirtyPaths {
+    tracked: Vec<String>,
+    untracked: Vec<String>,
+}
+
+fn dirty_paths(repo: &str) -> Result<DirtyPaths, String> {
+    let output = run_git(
+        repo,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+        Duration::from_secs(20),
+    )?;
+    if !output.status.success() {
+        return Err(format!("读取状态失败：{}", lossy(&output.stderr)));
+    }
+    let parts: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect();
+    let mut tracked = Vec::new();
+    let mut untracked = Vec::new();
+    let mut index = 0;
+    while index < parts.len() {
+        let entry = &parts[index];
+        if entry.len() < 3 {
+            index += 1;
+            continue;
         }
-        run_git(&top, &["push", "-u", "origin", &branch], Duration::from_secs(60))?
+        let x = entry.chars().next().unwrap_or(' ');
+        let y = entry.chars().nth(1).unwrap_or(' ');
+        let path = entry[3..].to_string();
+        if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+            index += 1;
+        }
+        index += 1;
+        if x == '?' || y == '?' {
+            untracked.push(path);
+        } else {
+            tracked.push(path);
+        }
+    }
+    Ok(DirtyPaths { tracked, untracked })
+}
+
+fn incoming_paths(repo: &str) -> Result<Vec<String>, String> {
+    let output = run_git(
+        repo,
+        &["diff", "--name-only", "HEAD...@{upstream}"],
+        Duration::from_secs(20),
+    )?;
+    let text = ensure_ok(&output, "读取远程变更")?;
+    Ok(text.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect())
+}
+
+fn update_risk_message(strategy: &str, overlap: &[String], tracked_dirty: &[String]) -> (bool, String, Vec<String>) {
+    if strategy != "merge" && !tracked_dirty.is_empty() {
+        let paths = if overlap.is_empty() { tracked_dirty.to_vec() } else { overlap.to_vec() };
+        let files = if paths.is_empty() { String::new() } else { format!("涉及 {}。", join_limited(&paths)) };
+        return (
+            true,
+            format!("工作区有未提交修改，当前仓库配置为变基，继续可能失败。{files}仍要继续？"),
+            paths,
+        );
+    }
+    if !overlap.is_empty() {
+        return (
+            true,
+            format!("这些未提交文件可能和远程更新冲突：{}。仍要继续？", join_limited(overlap)),
+            overlap.to_vec(),
+        );
+    }
+    (false, String::new(), Vec::new())
+}
+
+pub fn update_repo(repo: &str, confirm_risk: bool, on_progress: &mut dyn FnMut(&str)) -> Result<SyncOutcome, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let (branch, _) = require_branch(&top)?;
+    let remote = choose_remote(&top, &branch)?;
+    on_progress("正在连接远程，若弹出登录窗口请完成登录");
+    let fetched = run_git_streaming(
+        &top,
+        &["fetch", "--progress", "--prune", &remote],
+        NETWORK_TIMEOUT,
+        Some(NETWORK_STALL),
+        on_progress,
+    )?;
+    finish_network(&fetched, "拉取")?;
+    let Some(_upstream) = upstream_ref(&top) else {
+        return Ok(sync_outcome(
+            "ok",
+            "已刷新远程，但当前分支没有上游，未合并。",
+            0,
+            0,
+            &remote,
+            &branch,
+            Vec::new(),
+        ));
     };
-    ensure_ok(&output, "推送")
+    let (ahead, behind) = ahead_behind(&top);
+    if behind == 0 {
+        let message = if ahead > 0 {
+            format!("已是最新，本地还有 {ahead} 个提交未推送")
+        } else {
+            "已是最新".into()
+        };
+        return Ok(sync_outcome("up_to_date", message, ahead, behind, &remote, &branch, Vec::new()));
+    }
+    let strategy = integrate_strategy(config_get(&top, "pull.rebase").as_deref())?;
+    let dirty = dirty_paths(&top)?;
+    let incoming = incoming_paths(&top)?;
+    let mut comparable = dirty.tracked.clone();
+    comparable.extend(dirty.untracked.iter().cloned());
+    let overlap = overlapping_paths(&comparable, &incoming);
+    let (needs_confirm, message, paths) = update_risk_message(strategy, &overlap, &dirty.tracked);
+    if needs_confirm && !confirm_risk {
+        return Ok(sync_outcome("needs_confirm", message, ahead, behind, &remote, &branch, paths));
+    }
+    let integrate_label = if strategy == "merge" { "正在合并远程更新…" } else { "正在变基到远程更新…" };
+    on_progress(integrate_label);
+    let output = match strategy {
+        "rebase" => run_git_streaming(&top, &["rebase", "--", "@{upstream}"], NETWORK_TIMEOUT, None, on_progress)?,
+        "rebase-merges" => run_git_streaming(
+            &top,
+            &["rebase", "--rebase-merges", "--", "@{upstream}"],
+            NETWORK_TIMEOUT,
+            None,
+            on_progress,
+        )?,
+        _ => run_git_streaming(&top, &["merge", "--no-edit", "--", "@{upstream}"], NETWORK_TIMEOUT, None, on_progress)?,
+    };
+    let text = finish_network(&output, if strategy == "merge" { "合并" } else { "变基" })?;
+    let (ahead, behind) = ahead_behind(&top);
+    Ok(sync_outcome(
+        "ok",
+        command_summary_text(&text, "已更新"),
+        ahead,
+        behind,
+        &remote,
+        &branch,
+        Vec::new(),
+    ))
+}
+
+fn command_summary_text(text: &str, fallback: &str) -> String {
+    let line = first_line(text);
+    if line.is_empty() { fallback.into() } else { line }
+}
+
+pub fn push_repo(repo: &str, allow_set_upstream: bool, on_progress: &mut dyn FnMut(&str)) -> Result<SyncOutcome, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let (branch, _) = require_branch(&top)?;
+    let remote = choose_remote(&top, &branch)?;
+    if upstream_ref(&top).is_none() {
+        if !allow_set_upstream {
+            return Ok(sync_outcome(
+                "needs_confirm",
+                format!("当前分支 {branch} 还没有上游。推送到 {remote}/{branch} 会写入上游配置。继续？"),
+                0,
+                0,
+                &remote,
+                &branch,
+                Vec::new(),
+            ));
+        }
+        on_progress("正在连接远程，若弹出登录窗口请完成登录");
+        let output = run_git_streaming(
+            &top,
+            &["push", "--progress", "-u", &remote, &branch],
+            NETWORK_TIMEOUT,
+            Some(NETWORK_STALL),
+            on_progress,
+        )?;
+        let text = finish_network(&output, "推送")?;
+        let (ahead, behind) = ahead_behind(&top);
+        return Ok(sync_outcome(
+            "ok",
+            command_summary_text(&text, "已推送并设置上游"),
+            ahead,
+            behind,
+            &remote,
+            &branch,
+            Vec::new(),
+        ));
+    }
+    let (ahead, behind) = ahead_behind(&top);
+    if ahead == 0 {
+        let message = if behind > 0 {
+            format!("没有需要推送的提交。远程还有 {behind} 个提交，可先 Update。")
+        } else {
+            "已与远程同步，没有需要推送的提交。".into()
+        };
+        return Ok(sync_outcome("up_to_date", message, ahead, behind, &remote, &branch, Vec::new()));
+    }
+    on_progress("正在连接远程，若弹出登录窗口请完成登录");
+    let output = run_git_streaming(
+        &top,
+        &["push", "--progress"],
+        NETWORK_TIMEOUT,
+        Some(NETWORK_STALL),
+        on_progress,
+    )?;
+    let text = finish_network(&output, "推送")?;
+    let (ahead, behind) = ahead_behind(&top);
+    Ok(sync_outcome(
+        "ok",
+        command_summary_text(&text, "已推送"),
+        ahead,
+        behind,
+        &remote,
+        &branch,
+        Vec::new(),
+    ))
 }
 
 pub fn stash_save(repo: &str, message: &str) -> Result<String, String> {
@@ -2081,17 +2673,28 @@ fn validate_rev(spec: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn fetch_repo(repo: &str) -> Result<String, String> {
+pub fn fetch_repo(repo: &str, on_progress: &mut dyn FnMut(&str)) -> Result<String, String> {
+    let _pause = WatchPauseGuard::new();
     let top = validate_repo(repo)?;
-    let output = run_git(&top, &["fetch", "--prune", "--all"], Duration::from_secs(60))?;
+    on_progress("正在连接远程，若弹出登录窗口请完成登录");
+    let output = run_git_streaming(
+        &top,
+        &["fetch", "--progress", "--prune", "--all"],
+        NETWORK_TIMEOUT,
+        Some(NETWORK_STALL),
+        on_progress,
+    )?;
     if output.status.success() {
-        let text = lossy(&output.stderr);
-        let text = if text.trim().is_empty() { lossy(&output.stdout) } else { text };
-        return Ok(text.lines().find(|line| !line.trim().is_empty()).unwrap_or("远程引用已更新").to_string());
+        let text = finish_network(&output, "刷新远程")?;
+        let line = first_line(&text);
+        return Ok(if line.is_empty() { "远程引用已更新".into() } else { line });
     }
     let msg = lossy(&output.stderr);
     if msg.to_ascii_lowercase().contains("no remote") {
         return Err("没有配置远程仓库".into());
+    }
+    if let Some(hint) = auth_hint(&msg) {
+        return Err(hint.into());
     }
     Err(if msg.trim().is_empty() { "刷新远程引用失败".into() } else { msg })
 }
@@ -2682,6 +3285,110 @@ mod tests {
         assert!(new_spans.iter().any(|span| span.kind == "add" && span.text.contains("EasyGit")));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auth_hint_maps_credential_failures() {
+        assert!(auth_hint("fatal: Authentication failed for 'https://example.com'").is_some());
+        assert!(auth_hint("fatal: could not read Username: terminal prompts disabled").is_some());
+        assert!(auth_hint("Permission denied (publickey).").is_some());
+        assert!(auth_hint("merge conflict in a.txt").is_none());
+    }
+
+    #[test]
+    fn integrate_strategy_follows_pull_rebase() {
+        assert_eq!(integrate_strategy(None).unwrap(), "merge");
+        assert_eq!(integrate_strategy(Some("false")).unwrap(), "merge");
+        assert_eq!(integrate_strategy(Some("true")).unwrap(), "rebase");
+        assert_eq!(integrate_strategy(Some("merges")).unwrap(), "rebase-merges");
+        assert!(integrate_strategy(Some("interactive")).is_err());
+    }
+
+    #[test]
+    fn overlapping_paths_normalizes_separators() {
+        let found = overlapping_paths(&["src\\a.txt".into(), "other.txt".into()], &["src/a.txt".into()]);
+        assert_eq!(found, vec!["src/a.txt".to_string()]);
+    }
+
+    fn git_ok(cwd: &str, args: &[&str]) {
+        let output = run_git(cwd, args, Duration::from_secs(20)).unwrap();
+        assert!(output.status.success(), "{:?} {}", args, lossy(&output.stderr));
+    }
+
+    fn init_repo(path: &std::path::Path) {
+        fs::create_dir_all(path).unwrap();
+        let cwd = path.to_string_lossy().to_string();
+        git_ok(&cwd, &["init", "-b", "main"]);
+        git_ok(&cwd, &["config", "user.email", "test@easygit.local"]);
+        git_ok(&cwd, &["config", "user.name", "EasyGit Test"]);
+    }
+
+    #[test]
+    fn push_confirms_upstream_and_skips_when_nothing_to_push() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("easy-git-sync-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("local");
+        let bare_s = bare.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+        git_ok(&root_s, &["init", "--bare", "-b", "main", &bare_s]);
+        init_repo(&local);
+        fs::write(local.join("a.txt"), "v1\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "init"]);
+        git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
+
+        let asked = push_repo(&local_s, false, &mut |_| {}).unwrap();
+        assert_eq!(asked.status, "needs_confirm");
+        assert!(upstream_ref(&local_s).is_none(), "confirm must not set upstream");
+
+        let pushed = push_repo(&local_s, true, &mut |_| {}).unwrap();
+        assert_eq!(pushed.status, "ok", "{}", pushed.message);
+        assert!(upstream_ref(&local_s).is_some());
+
+        let again = push_repo(&local_s, false, &mut |_| {}).unwrap();
+        assert_eq!(again.status, "up_to_date", "{}", again.message);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_asks_before_overlapping_local_changes() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("easy-git-update-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let origin = root.join("origin");
+        let local = root.join("local");
+        init_repo(&origin);
+        let origin_s = origin.to_string_lossy().to_string();
+        fs::write(origin.join("a.txt"), "v1\n").unwrap();
+        git_ok(&origin_s, &["add", "a.txt"]);
+        git_ok(&origin_s, &["commit", "-m", "v1"]);
+        let root_s = root.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        git_ok(&root_s, &["clone", &origin_s, &local_s]);
+        let before = run_git(&local_s, &["rev-parse", "HEAD"], Duration::from_secs(8)).unwrap();
+        fs::write(origin.join("a.txt"), "v2\n").unwrap();
+        git_ok(&origin_s, &["add", "a.txt"]);
+        git_ok(&origin_s, &["commit", "-m", "v2"]);
+        fs::write(local.join("a.txt"), "local\n").unwrap();
+
+        let asked = update_repo(&local_s, false, &mut |_| {}).unwrap();
+        assert_eq!(asked.status, "needs_confirm", "{}", asked.message);
+        assert!(asked.conflicting_paths.iter().any(|path| path.ends_with("a.txt")));
+        let after = run_git(&local_s, &["rev-parse", "HEAD"], Duration::from_secs(8)).unwrap();
+        assert_eq!(lossy(&before.stdout), lossy(&after.stdout), "confirm must not merge");
+        assert_eq!(fs::read_to_string(local.join("a.txt")).unwrap(), "local\n");
+        let _ = fs::remove_dir_all(&root);
     }
 }
 

@@ -27,6 +27,7 @@ import {
   inspectFile,
   isTauriEnvironment,
   listenGitChanged,
+  listenGitProgress,
   loadConflict,
   loadFileDiff,
   loadRepoSnapshot,
@@ -36,7 +37,6 @@ import {
   mergeBranch,
   pickDirectory,
   processMemoryMb,
-  pullRepo,
   pushRepo,
   rebaseOnto,
   removeSavedRepo,
@@ -46,6 +46,7 @@ import {
   revealPath,
   revertCommit,
   setWatchPath,
+  setWatchPaused,
   shelfPatchFiles,
   smartMergeConflict,
   stashPatchFiles,
@@ -57,6 +58,8 @@ import {
   toggleFavoriteRepo,
   unshelve,
   unstagePaths,
+  updateRepo,
+  type SyncOutcome,
 } from './services/gitService';
 import {
   mockBranches,
@@ -98,9 +101,13 @@ export function App() {
   const [diffFiles, setDiffFiles] = useState<RevisionFile[]>([]);
   const diffLoader = useRef<(path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>>(async () => []);
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
+  const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  const [opsLocked, setOpsLocked] = useState(false);
   const refreshLock = useRef(false);
   const refreshAgain = useRef(false);
   const diffLock = useRef(new Set<string>());
+  const opLock = useRef(false);
+  const acceptProgress = useRef(false);
 
   const showToast = (text: string, error = false) => {
     setToast({ text, error });
@@ -150,20 +157,124 @@ export function App() {
     }
   }, [activeRepo?.path, applySnapshot]);
 
+  const applySyncCounts = (repoPath: string, outcome: SyncOutcome) => {
+    setAheadCount(outcome.ahead);
+    setBehindCount(outcome.behind);
+    setRepositories(prev => prev.map(repo => repo.path === repoPath ? {
+      ...repo,
+      aheadCount: outcome.ahead,
+      behindCount: outcome.behind,
+    } : repo));
+  };
+
+  const releaseOp = () => {
+    acceptProgress.current = false;
+    opLock.current = false;
+    setOpsLocked(false);
+    setBusyLabel(null);
+  };
+
   const run = useCallback(async (label: string, action: () => Promise<string | void>) => {
     if (!isTauriEnvironment() || !activeRepo) {
       showToast('浏览器预览不会改动真实仓库，请用 pnpm tauri dev', true);
       return;
     }
+    if (opLock.current) return;
+    opLock.current = true;
+    setOpsLocked(true);
+    setBusyLabel('正在执行…');
     try {
       const text = await action();
-      showToast(text ? `${label}：${text.split('\n')[0]}` : label);
+      showToast(text ? `${label}：${String(text).split('\n')[0]}` : label);
+      setBusyLabel(null);
       await refresh(activeRepo.path);
     } catch (err) {
       showToast(String(err), true);
+      setBusyLabel(null);
       await refresh(activeRepo.path);
+    } finally {
+      releaseOp();
     }
   }, [activeRepo, refresh]);
+
+  const guardNetwork = useCallback(async (action: (repoPath: string) => Promise<void>) => {
+    if (!isTauriEnvironment() || !activeRepo) {
+      showToast('浏览器预览不会改动真实仓库，请用 pnpm tauri dev', true);
+      return;
+    }
+    if (opLock.current) return;
+    const repoPath = activeRepo.path;
+    opLock.current = true;
+    setOpsLocked(true);
+    setBusyLabel('正在连接远程，若弹出登录窗口请完成登录');
+    acceptProgress.current = true;
+    try {
+      await setWatchPaused(true);
+      await action(repoPath);
+    } catch (err) {
+      showToast(String(err), true);
+      await refresh(repoPath);
+    } finally {
+      await setWatchPaused(false).catch(() => undefined);
+      releaseOp();
+    }
+  }, [activeRepo, refresh]);
+
+  const finishNetwork = async (repoPath: string, outcome: SyncOutcome) => {
+    applySyncCounts(repoPath, outcome);
+    showToast(outcome.message || '完成');
+    acceptProgress.current = false;
+    setBusyLabel(null);
+    await refresh(repoPath);
+  };
+
+  const handleUpdate = useCallback(() => {
+    void guardNetwork(async (repoPath) => {
+      let outcome = await updateRepo(repoPath, false);
+      if (outcome.status === 'needs_confirm') {
+        acceptProgress.current = false;
+        setBusyLabel(null);
+        if (!window.confirm(outcome.message)) {
+          applySyncCounts(repoPath, outcome);
+          showToast('已取消更新');
+          await refresh(repoPath);
+          return;
+        }
+        acceptProgress.current = true;
+        setBusyLabel('正在合并远程更新…');
+        outcome = await updateRepo(repoPath, true);
+      }
+      await finishNetwork(repoPath, outcome);
+    });
+  }, [guardNetwork, refresh]);
+
+  const handlePush = useCallback(() => {
+    void guardNetwork(async (repoPath) => {
+      let outcome = await pushRepo(repoPath, false);
+      if (outcome.status === 'needs_confirm') {
+        acceptProgress.current = false;
+        setBusyLabel(null);
+        if (!window.confirm(outcome.message)) {
+          showToast('已取消推送');
+          return;
+        }
+        acceptProgress.current = true;
+        setBusyLabel(`正在推送到 ${outcome.remote}/${outcome.branch}…`);
+        outcome = await pushRepo(repoPath, true);
+      }
+      await finishNetwork(repoPath, outcome);
+    });
+  }, [guardNetwork, refresh]);
+
+  const handleFetch = useCallback(() => {
+    void guardNetwork(async (repoPath) => {
+      const text = await fetchRepo(repoPath);
+      showToast(text ? `已刷新远程：${text.split('\n')[0]}` : '已刷新远程');
+      acceptProgress.current = false;
+      setBusyLabel(null);
+      await refresh(repoPath);
+    });
+  }, [guardNetwork, refresh]);
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
@@ -197,6 +308,23 @@ export function App() {
       unlisten();
     };
   }, [activeRepo?.path, refresh]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    let stop = false;
+    let unlisten = () => {};
+    void listenGitProgress((event) => {
+      if (stop || !acceptProgress.current) return;
+      if (activeRepo && event.repoPath !== activeRepo.path) return;
+      const line = event.line.trim();
+      if (!line) return;
+      setBusyLabel(line.length > 80 ? `${line.slice(0, 80)}…` : line);
+    }).then(fn => { unlisten = fn; }).catch(() => undefined);
+    return () => {
+      stop = true;
+      unlisten();
+    };
+  }, [activeRepo?.path]);
 
   const handleSelectRepo = (repo: GitRepository) => {
     setActiveRepoId(repo.id);
@@ -401,7 +529,7 @@ export function App() {
         setActiveTab('commit');
       } else if (e.ctrlKey && e.shiftKey && (e.key.toLowerCase() === 'k' || code === 'KeyK')) {
         e.preventDefault();
-        if (activeRepo) void run('推送', () => pushRepo(activeRepo.path));
+        handlePush();
       } else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setActiveTab('commit');
@@ -409,12 +537,12 @@ export function App() {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
         e.preventDefault();
-        if (activeRepo) void run('拉取', () => pullRepo(activeRepo.path));
+        handleUpdate();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [activeRepo, run]);
+  }, [handlePush, handleUpdate]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
@@ -442,9 +570,11 @@ export function App() {
           currentBranch={currentBranch}
           onOpenBranches={() => setIsBranchesOpen(true)}
           onCommitClick={() => setActiveTab('commit')}
-          onUpdateClick={() => activeRepo && void run('拉取', () => pullRepo(activeRepo.path))}
-          onPushClick={() => activeRepo && void run('推送', () => pushRepo(activeRepo.path))}
-          onFetchClick={() => activeRepo && void run('已刷新远程', () => fetchRepo(activeRepo.path))}
+          onUpdateClick={handleUpdate}
+          onPushClick={handlePush}
+          onFetchClick={handleFetch}
+          busyLabel={busyLabel}
+          operationsLocked={opsLocked}
           onRollbackClick={() => {
             if (!activeRepo || changes.length === 0) {
               showToast('没有可回滚的更改', true);
