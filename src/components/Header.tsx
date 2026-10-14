@@ -1,29 +1,53 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   GitBranch, 
   ArrowDownToLine, 
   ArrowUpFromLine, 
-  Check, 
+  CheckSquare, 
+  GitGraph, 
   RotateCcw, 
   RefreshCw, 
-  Clock, 
   FolderGit2, 
   Layers, 
-  Sparkles,
-  Cpu
+  Cpu, 
+  ChevronDown, 
+  MoreHorizontal, 
+  AlertTriangle, 
+  GitMerge,
+  Copy,
+  ExternalLink,
+  Plus,
+  Search,
+  Star,
+  Trash2,
+  Check
 } from 'lucide-react';
+import { GitRepository } from '../types/git';
+
+export type MainViewMode = 'log' | 'commit';
 
 interface HeaderProps {
   currentRepoName?: string;
   currentRepoPath?: string;
+  repositories?: GitRepository[];
+  activeRepoId?: string;
+  onSelectRepo?: (repo: GitRepository) => void;
+  onAddRepoClick?: () => void;
+  onToggleFavoriteRepo?: (repoId: string) => void;
+  onRemoveRepo?: (repoId: string) => void;
+  onRevealRepo?: (repo: GitRepository) => void;
   currentBranch: string;
+  activeMode: MainViewMode;
+  onModeChange: (mode: MainViewMode) => void;
+  changesCount?: number;
   onOpenBranches: () => void;
-  onCommitClick: () => void;
   onUpdateClick: () => void;
   onPushClick: () => void;
   onFetchClick: () => void;
   onRollbackClick: () => void;
   onShelfClick: () => void;
+  onOpenMerge?: () => void;
+  hasConflict?: boolean;
   aheadCount?: number;
   behindCount?: number;
   memoryMb?: number;
@@ -33,148 +57,408 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   currentRepoName = 'easy-git',
-  currentRepoPath = 'D:/workspace/aiwork/easy-git',
+  currentRepoPath = '',
+  repositories = [],
+  activeRepoId = '',
+  onSelectRepo,
+  onAddRepoClick,
+  onToggleFavoriteRepo,
+  onRemoveRepo,
+  onRevealRepo,
   currentBranch,
+  activeMode,
+  onModeChange,
+  changesCount = 0,
   onOpenBranches,
-  onCommitClick,
   onUpdateClick,
   onPushClick,
   onFetchClick,
   onRollbackClick,
   onShelfClick,
+  onOpenMerge,
+  hasConflict = false,
   aheadCount = 0,
   behindCount = 0,
   memoryMb,
   busyLabel,
   operationsLocked = false,
 }) => {
-  const lockClass = operationsLocked ? 'opacity-50 cursor-not-allowed' : '';
+  const [isRepoMenuOpen, setIsRepoMenuOpen] = useState(false);
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const [repoSearch, setRepoSearch] = useState('');
+  const repoMenuRef = useRef<HTMLDivElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+
+  // 点击外部关闭下拉菜单
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (repoMenuRef.current && !repoMenuRef.current.contains(e.target as Node)) {
+        setIsRepoMenuOpen(false);
+      }
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
+        setIsMoreMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => window.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const lockClass = operationsLocked ? 'opacity-50 cursor-not-allowed pointer-events-none' : '';
+
+  // 排序与过滤仓库
+  const filteredRepos = repositories.filter(r => 
+    r.name.toLowerCase().includes(repoSearch.toLowerCase()) ||
+    r.path.toLowerCase().includes(repoSearch.toLowerCase())
+  );
+  const sortedRepos = [...filteredRepos].sort((a, b) => {
+    if (a.isFavorite && !b.isFavorite) return -1;
+    if (!a.isFavorite && b.isFavorite) return 1;
+    return 0;
+  });
+
+  const handleCopy = (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(path);
+  };
+
   return (
-    <header className="h-11 bg-jb-panel border-b border-jb-border flex items-center justify-between px-3 select-none text-xs">
-      {/* 左侧：Logo 与仓库路径 */}
-      <div className="flex items-center space-x-3">
-        <div className="flex items-center space-x-2 text-jb-text-primary font-semibold tracking-wide">
-          <div className="w-6 h-6 rounded bg-jb-blue/20 flex items-center justify-center text-jb-blue">
-            <FolderGit2 className="w-4 h-4" />
+    <header className="h-11 bg-[#1E1F22] border-b border-[#303236] flex items-center justify-between px-3 select-none text-xs z-30 relative shadow-sm">
+      {/* ─── 左区：Logo + 仓库下拉切换器 + 分支快速胶囊 ─── */}
+      <div className="flex items-center space-x-2.5 min-w-0">
+        {/* Logo */}
+        <div className="flex items-center space-x-1.5 shrink-0">
+          <div className="w-6 h-6 rounded bg-[#3574F0]/15 flex items-center justify-center text-[#3574F0] border border-[#3574F0]/30 shadow-inner">
+            <FolderGit2 className="w-3.5 h-3.5" />
           </div>
-          <span className="text-sm font-bold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-300 bg-clip-text text-transparent">
+          <span className="font-bold tracking-tight bg-gradient-to-r from-blue-400 via-indigo-300 to-sky-300 bg-clip-text text-transparent text-sm">
             EasyGit
           </span>
-          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-jb-bg text-jb-blue border border-jb-border">
-            IDEA Style
-          </span>
         </div>
 
-        <div className="h-4 w-px bg-jb-border" />
+        <div className="h-3.5 w-px bg-[#303236] shrink-0" />
 
-        {/* 仓库信息 */}
-        <div className="flex items-center space-x-1.5 text-jb-text-secondary hover:text-jb-text-primary cursor-pointer px-1.5 py-1 rounded hover:bg-jb-hover transition-colors">
-          <span className="text-jb-text-muted">Repository:</span>
-          <span className="font-mono text-jb-text-primary font-medium">{currentRepoName}</span>
-          <span className="text-[11px] text-jb-text-muted">({currentRepoPath})</span>
+        {/* 仓库下拉选择器 */}
+        <div className="relative" ref={repoMenuRef}>
+          <button
+            onClick={() => setIsRepoMenuOpen(!isRepoMenuOpen)}
+            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded bg-[#2B2D30]/80 hover:bg-[#35373C] border border-[#393B40] text-[#DFE1E5] transition-all max-w-[220px] ${
+              isRepoMenuOpen ? 'border-[#3574F0] ring-1 ring-[#3574F0]/30' : ''
+            }`}
+            title={`当前项目：${currentRepoName} (${currentRepoPath})`}
+          >
+            <FolderGit2 className="w-3.5 h-3.5 text-[#3574F0] shrink-0" />
+            <span className="font-medium truncate font-mono text-[11px]">{currentRepoName}</span>
+            <ChevronDown className={`w-3 h-3 text-[#9DA0A8] shrink-0 transition-transform ${isRepoMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {/* 仓库全功能下拉面板 */}
+          {isRepoMenuOpen && (
+            <div className="absolute left-0 top-full mt-1.5 w-80 bg-[#1E1F22] border border-[#393B40] rounded-lg shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-100 overflow-hidden flex flex-col">
+              {/* 搜索框 */}
+              <div className="p-2 border-b border-[#303236] bg-[#2B2D30]/50">
+                <div className="relative">
+                  <Search className="w-3 h-3 text-[#6F737A] absolute left-2 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={repoSearch}
+                    onChange={(e) => setRepoSearch(e.target.value)}
+                    placeholder="搜索项目或路径..."
+                    className="w-full bg-[#1E1F22] border border-[#393B40] rounded pl-6 pr-2 py-1 text-xs text-[#DFE1E5] placeholder-[#6F737A] focus:outline-none focus:border-[#3574F0]"
+                  />
+                </div>
+              </div>
+
+              {/* 仓库列表项 */}
+              <div className="max-h-64 overflow-y-auto p-1.5 space-y-0.5">
+                {sortedRepos.map(repo => {
+                  const isActive = repo.id === activeRepoId;
+                  return (
+                    <div
+                      key={repo.id}
+                      onClick={() => {
+                        onSelectRepo?.(repo);
+                        setIsRepoMenuOpen(false);
+                      }}
+                      className={`p-2 rounded-md cursor-pointer transition-all relative group flex flex-col text-xs border ${
+                        isActive
+                          ? 'bg-[#2E436E]/50 border-[#3574F0]/70 text-white'
+                          : 'hover:bg-[#2B2D30] border-transparent text-[#DFE1E5]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between min-w-0">
+                        <div className="flex items-center space-x-1.5 min-w-0">
+                          <FolderGit2 className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-[#3574F0]' : 'text-[#8C9099]'}`} />
+                          <span className="font-semibold truncate">{repo.name}</span>
+                          {repo.isFavorite && (
+                            <Star className="w-3 h-3 text-amber-400 fill-amber-400 shrink-0" />
+                          )}
+                        </div>
+
+                        {/* 快捷操作浮层 */}
+                        <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleFavoriteRepo?.(repo.id);
+                            }}
+                            title={repo.isFavorite ? "取消收藏" : "收藏置顶"}
+                            className="p-0.5 hover:text-amber-400 text-[#8C9099]"
+                          >
+                            <Star className={`w-3 h-3 ${repo.isFavorite ? 'fill-amber-400 text-amber-400' : ''}`} />
+                          </button>
+                          <button
+                            onClick={(e) => handleCopy(repo.path, e)}
+                            title="复制路径"
+                            className="p-0.5 hover:text-[#DFE1E5] text-[#8C9099]"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRevealRepo?.(repo);
+                            }}
+                            title="打开目录"
+                            className="p-0.5 hover:text-[#DFE1E5] text-[#8C9099]"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`从 EasyGit 列表中移除项目 "${repo.name}"？`)) {
+                                onRemoveRepo?.(repo.id);
+                              }
+                            }}
+                            title="移除项目"
+                            className="p-0.5 hover:text-rose-400 text-[#8C9099]"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="text-[10px] text-[#8C9099] truncate font-mono mt-0.5 pl-5" title={repo.path}>
+                        {repo.path}
+                      </div>
+
+                      <div className="flex items-center justify-between mt-1 pl-5 text-[10px]">
+                        <span className="text-[#589DF6] font-mono">{repo.currentBranch}</span>
+                        {repo.dirtyFilesCount > 0 ? (
+                          <span className="px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[9px] font-semibold">
+                            ● {repo.dirtyFilesCount}
+                          </span>
+                        ) : (
+                          <span className="text-emerald-400 flex items-center space-x-0.5 text-[9px]">
+                            <Check className="w-2.5 h-2.5" />
+                            <span>clean</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 底部：添加本地仓库按钮 */}
+              <div className="p-2 border-t border-[#303236] bg-[#2B2D30]/60 flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    setIsRepoMenuOpen(false);
+                    onAddRepoClick?.();
+                  }}
+                  className="w-full py-1.5 px-2 rounded bg-[#3574F0] hover:bg-[#3574F0]/90 text-white font-medium text-xs flex items-center justify-center space-x-1 transition-colors shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>添加本地 Git 仓库...</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* 分支选择器胶囊（移到左区仓库旁，紧贴上下文） */}
+        <button
+          onClick={onOpenBranches}
+          className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-[#2B2D30]/80 hover:bg-[#35373C] border border-[#393B40] text-[#DFE1E5] hover:border-[#4E5157] transition-all font-mono text-[11px] shadow-sm max-w-[200px]"
+          title="点击打开分支管理面板"
+        >
+          <GitBranch className="w-3.5 h-3.5 text-[#3574F0] shrink-0" />
+          <span className="font-semibold text-blue-400 truncate">{currentBranch}</span>
+          {(aheadCount > 0 || behindCount > 0) && (
+            <span className="text-[10px] text-[#DFE1E5] bg-[#1E1F22] px-1 py-0.2 rounded border border-[#393B40] font-mono flex items-center space-x-0.5 shrink-0">
+              {aheadCount > 0 && <span className="text-blue-400">↑{aheadCount}</span>}
+              {behindCount > 0 && <span className="text-amber-400">↓{behindCount}</span>}
+            </span>
+          )}
+          <ChevronDown className="w-3 h-3 text-[#8C9099] shrink-0" />
+        </button>
+
+        {/* 冲突全局状态快捷胶囊 */}
+        {hasConflict && (
+          <button
+            onClick={onOpenMerge}
+            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition-colors animate-pulse text-[11px]"
+            title="检测到合并冲突，点击进入 3-Way Merge 解决器"
+          >
+            <AlertTriangle className="w-3 h-3 text-amber-400" />
+            <span className="font-semibold">解决冲突</span>
+          </button>
+        )}
       </div>
 
-      {/* 中间：经典 IDEA Git 常用操作工具栏 */}
-      <div className="flex items-center space-x-1 bg-jb-bg/60 p-0.5 rounded-md border border-jb-border">
-        {/* Update Project (Ctrl+T) */}
-        <button 
-          onClick={onUpdateClick}
-          disabled={operationsLocked}
-          title="Update Project (Ctrl+T) - 先拉取远程，再按仓库的 pull.rebase 合并或变基"
-          className={`flex items-center space-x-1 px-2 py-1 rounded hover:bg-jb-hover text-jb-text-primary transition-colors ${lockClass}`}
+      {/* ─── 中区：核心双模式分段切换器 [ Log | Commit ] ─── */}
+      <div className="flex items-center bg-[#2B2D30] p-0.5 rounded-lg border border-[#393B40] shadow-inner">
+        <button
+          onClick={() => onModeChange('log')}
+          className={`flex items-center space-x-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
+            activeMode === 'log'
+              ? 'bg-[#3574F0] text-white shadow'
+              : 'text-[#9DA0A8] hover:text-[#DFE1E5] hover:bg-[#35373C]/60'
+          }`}
+          title="Git Log 历史与提交图谱 (Alt+9)"
         >
-          <ArrowDownToLine className="w-3.5 h-3.5 text-jb-blue" />
-          <span className="hidden sm:inline">Update</span>
+          <GitGraph className="w-3.5 h-3.5" />
+          <span>Git Log</span>
+          <span className={`text-[10px] font-mono ml-0.5 hidden sm:inline ${activeMode === 'log' ? 'text-blue-100' : 'text-[#6F737A]'}`}>
+            Alt+9
+          </span>
         </button>
 
-        {/* Commit... (Ctrl+K) */}
-        <button 
-          onClick={onCommitClick}
-          title="Commit... (Ctrl+K) - 提交当前工作区变更"
-          className="flex items-center space-x-1 px-2.5 py-1 rounded bg-jb-blue/20 hover:bg-jb-blue/30 text-jb-blue font-medium transition-colors border border-jb-blue/30"
+        <button
+          onClick={() => onModeChange('commit')}
+          className={`flex items-center space-x-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all relative ${
+            activeMode === 'commit'
+              ? 'bg-[#3574F0] text-white shadow'
+              : 'text-[#9DA0A8] hover:text-[#DFE1E5] hover:bg-[#35373C]/60'
+          }`}
+          title="工作区变更与提交 (Alt+0)"
         >
-          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-          <span>Commit</span>
+          <CheckSquare className="w-3.5 h-3.5" />
+          <span>Commit & Diff</span>
+          {changesCount > 0 && (
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono leading-none ${
+              activeMode === 'commit'
+                ? 'bg-white text-[#3574F0] font-bold'
+                : 'bg-[#3574F0]/20 text-[#3574F0] border border-[#3574F0]/40'
+            }`}>
+              {changesCount}
+            </span>
+          )}
+          <span className={`text-[10px] font-mono ml-0.5 hidden sm:inline ${activeMode === 'commit' ? 'text-blue-100' : 'text-[#6F737A]'}`}>
+            Alt+0
+          </span>
         </button>
+      </div>
 
-        {/* Push... (Ctrl+Shift+K) */}
-        <button 
-          onClick={onPushClick}
-          disabled={operationsLocked}
-          title="Push (Ctrl+Shift+K) - 推送本地提交。没有上游时会先确认目标"
-          className={`flex items-center space-x-1 px-2 py-1 rounded hover:bg-jb-hover text-jb-text-primary transition-colors ${lockClass}`}
-        >
-          <ArrowUpFromLine className="w-3.5 h-3.5 text-indigo-400" />
-          <span className="hidden sm:inline">Push</span>
-        </button>
+      {/* ─── 右区：常用 Git 动作组、状态 ─── */}
+      <div className="flex items-center space-x-2">
+        {/* 常用 Git 操作组 */}
+        <div className="flex items-center space-x-0.5 bg-[#2B2D30]/60 p-0.5 rounded border border-[#393B40]">
+          {/* Update */}
+          <button 
+            onClick={onUpdateClick}
+            disabled={operationsLocked}
+            title="Update Project (Ctrl+T) - 拉取远程并合并/变基"
+            className={`flex items-center space-x-1 px-2.5 py-1 rounded hover:bg-[#35373C] text-[#DFE1E5] transition-colors ${lockClass}`}
+          >
+            <ArrowDownToLine className="w-3.5 h-3.5 text-[#3574F0]" />
+            <span className="hidden xl:inline text-[11px] font-medium">Update</span>
+          </button>
 
-        <div className="h-3.5 w-px bg-jb-border my-auto mx-0.5" />
+          {/* Push */}
+          <button 
+            onClick={onPushClick}
+            disabled={operationsLocked}
+            title="Push (Ctrl+Shift+K) - 推送本地提交到远程"
+            className={`flex items-center space-x-1 px-2.5 py-1 rounded hover:bg-[#35373C] text-[#DFE1E5] transition-colors ${lockClass}`}
+          >
+            <ArrowUpFromLine className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden xl:inline text-[11px] font-medium">Push</span>
+          </button>
 
-        {/* Fetch */}
-        <button 
-          onClick={onFetchClick}
-          disabled={operationsLocked}
-          title="Fetch - 刷新所有远程分支状态"
-          className={`p-1.5 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors ${lockClass}`}
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-        </button>
+          {/* Fetch */}
+          <button 
+            onClick={onFetchClick}
+            disabled={operationsLocked}
+            title="Fetch - 刷新所有远程分支状态"
+            className={`p-1.5 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5] transition-colors ${lockClass}`}
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
 
-        <button 
-          onClick={onRollbackClick}
-          disabled={operationsLocked}
-          title="Rollback - 撤销全部工作区更改"
-          className={`p-1.5 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors ${lockClass}`}
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-        </button>
+          {/* 更多动作下拉菜单 */}
+          <div className="relative" ref={moreMenuRef}>
+            <button
+              onClick={() => setIsMoreMenuOpen(!isMoreMenuOpen)}
+              title="更多 Git 工具（Shelf、Rollback、3-Way Merge等）"
+              className="p-1.5 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5] transition-colors"
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
 
-        {/* Shelve */}
-        <button 
-          onClick={onShelfClick}
-          title="Shelf / Stash - 架藏与暂存变更"
-          className="flex items-center space-x-1 px-2 py-1 rounded hover:bg-jb-hover text-jb-text-secondary hover:text-jb-text-primary transition-colors"
-        >
-          <Layers className="w-3.5 h-3.5 text-jb-orange" />
-          <span className="hidden md:inline">Shelf</span>
-        </button>
+            {isMoreMenuOpen && (
+              <div className="absolute right-0 top-full mt-1.5 w-48 bg-[#2B2D30] border border-[#393B40] rounded-md shadow-2xl py-1 z-50 text-xs">
+                <button
+                  onClick={() => {
+                    onShelfClick();
+                    setIsMoreMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#DFE1E5] hover:bg-[#35373C] flex items-center space-x-2 transition-colors"
+                >
+                  <Layers className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Shelf & Stash (架藏栈)</span>
+                </button>
 
+                <button
+                  onClick={() => {
+                    onOpenMerge?.();
+                    setIsMoreMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#DFE1E5] hover:bg-[#35373C] flex items-center space-x-2 transition-colors"
+                >
+                  <GitMerge className="w-3.5 h-3.5 text-purple-400" />
+                  <span>3-Way Merge (三方合并)</span>
+                </button>
+
+                <div className="my-1 border-t border-[#393B40]" />
+
+                <button
+                  onClick={() => {
+                    onRollbackClick();
+                    setIsMoreMenuOpen(false);
+                  }}
+                  disabled={operationsLocked}
+                  className="w-full px-3 py-1.5 text-left text-rose-300 hover:bg-rose-950/30 flex items-center space-x-2 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Rollback 全部工作区更改</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 正在连接提示 */}
         {busyLabel && (
           <span
-            className="max-w-[240px] truncate px-1.5 text-[11px] text-jb-text-muted"
-            title="正在连接远程，若弹出登录窗口请完成登录"
+            className="max-w-[140px] truncate px-1 text-[10px] text-amber-300 font-mono animate-pulse"
+            title={busyLabel}
           >
             {busyLabel}
           </span>
         )}
-      </div>
 
-      {/* 右侧：内存监控状态 & 分支切换入口小部件 */}
-      <div className="flex items-center space-x-3">
-        {/* 极致轻量内存指示（直击痛点） */}
-        <div 
-          className="hidden lg:flex items-center space-x-1.5 px-2 py-0.5 rounded bg-jb-bg border border-jb-border/70 text-[11px] text-jb-green font-mono"
-          title="EasyGit 内存占用 vs 传统 IDEA (约 2.5GB-4GB)，内存占用仅为其 1/50"
-        >
-          <Cpu className="w-3 h-3 text-jb-green" />
-          <span>Memory: {memoryMb && memoryMb > 0 ? `${memoryMb} MB` : '—'}</span>
-        </div>
-
-        {/* 分支小部件 */}
-        <button
-          onClick={onOpenBranches}
-          className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-jb-bg hover:bg-jb-hover border border-jb-border text-jb-text-primary hover:border-jb-borderHover transition-all font-mono text-xs shadow-sm"
-          title="点击打开 Git 分支管理面板"
-        >
-          <GitBranch className="w-3.5 h-3.5 text-jb-blue" />
-          <span className="font-semibold text-blue-400">{currentBranch}</span>
-          {(aheadCount > 0 || behindCount > 0) && (
-            <span className="text-[10px] text-jb-text-muted bg-jb-panel px-1 py-0.2 rounded border border-jb-border font-mono">
-              {aheadCount > 0 ? `↑${aheadCount}` : ''}{behindCount > 0 ? `↓${behindCount}` : ''}
-            </span>
-          )}
-        </button>
+        {/* 内存微标 */}
+        {memoryMb !== undefined && memoryMb > 0 && (
+          <div 
+            className="hidden 2xl:flex items-center space-x-1 px-1.5 py-0.5 rounded bg-[#2B2D30] border border-[#393B40] text-[10px] text-emerald-400 font-mono"
+            title="EasyGit 内存占用"
+          >
+            <Cpu className="w-3 h-3 text-emerald-400" />
+            <span>{memoryMb}MB</span>
+          </div>
+        )}
       </div>
     </header>
   );

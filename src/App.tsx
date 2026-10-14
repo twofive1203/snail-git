@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Header } from './components/Header';
-import { TabBar, ActiveTab } from './components/TabBar';
+import { ActiveTab } from './components/TabBar';
 import { GitLogView } from './components/GitLogView';
 import { CommitView } from './components/CommitView';
 import { BranchesModal } from './components/BranchesModal';
@@ -8,9 +8,9 @@ import { ShelfStashView } from './components/ShelfStashView';
 import { ThreeWayMergeModal } from './components/ThreeWayMergeModal';
 import { DiffModal } from './components/DiffModal';
 import { StatusBar } from './components/StatusBar';
-import { ProjectSidebar } from './components/ProjectSidebar';
+import { AddProjectModal } from './components/ProjectSidebar/AddProjectModal';
 import { DiffChunk, FileChange, GitRepository, RevisionFile, StashItem } from './types/git';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2 } from 'lucide-react';
 import {
   addSavedRepo,
   applyChunk,
@@ -89,6 +89,7 @@ export function App() {
   const [loading, setLoading] = useState(false);
 
   const [isBranchesOpen, setIsBranchesOpen] = useState(false);
+  const [isAddRepoOpen, setIsAddRepoOpen] = useState(false);
   const [memoryMb, setMemoryMb] = useState(0);
   const [fileEncoding, setFileEncoding] = useState('—');
   const [lineEnding, setLineEnding] = useState('—');
@@ -545,15 +546,16 @@ export function App() {
   }, [handlePush, handleUpdate]);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
-      <ProjectSidebar
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
+      <Header
+        currentRepoName={activeRepo?.name || (native ? '未打开仓库' : 'easy-git')}
+        currentRepoPath={activeRepo?.path || (native ? '点击添加一个本地 Git 仓库' : '')}
         repositories={repositories}
         activeRepoId={activeRepoId}
         onSelectRepo={handleSelectRepo}
-        onAddRepo={(name, path) => { void handleAddRepo(name, path); }}
-        onBrowse={pickDirectory}
+        onAddRepoClick={() => setIsAddRepoOpen(true)}
+        onToggleFavoriteRepo={(id) => { void handleToggleFavorite(id); }}
         onRemoveRepo={(id) => { void handleRemoveRepo(id); }}
-        onToggleFavorite={(id) => { void handleToggleFavorite(id); }}
         onRevealRepo={(repo) => {
           if (!isTauriEnvironment()) {
             showToast('浏览器预览不能打开资源管理器', true);
@@ -561,54 +563,73 @@ export function App() {
           }
           void revealPath(repo.path).catch(err => showToast(String(err), true));
         }}
+        currentBranch={currentBranch}
+        activeMode={activeTab === 'commit' ? 'commit' : 'log'}
+        onModeChange={(mode) => setActiveTab(mode)}
+        changesCount={changes.filter(c => c.isStaged).length}
+        onOpenBranches={() => setIsBranchesOpen(true)}
+        onUpdateClick={handleUpdate}
+        onPushClick={handlePush}
+        onFetchClick={handleFetch}
+        busyLabel={busyLabel}
+        operationsLocked={opsLocked}
+        hasConflict={changes.some(c => c.status === 'conflict')}
+        onOpenMerge={() => {
+          setActiveTab('merge');
+          const first = changes.find(file => file.status === 'conflict');
+          if (first) void loadConflictFile(first.path);
+        }}
+        onRollbackClick={() => {
+          if (!activeRepo || changes.length === 0) {
+            showToast('没有可回滚的更改', true);
+            return;
+          }
+          if (confirm(`回滚全部 ${changes.length} 个更改到 HEAD？此操作不可用普通撤销恢复。`)) {
+            void run('已回滚工作区', () => discardPaths(activeRepo.path, changes.map(file => file.path)));
+          }
+        }}
+        onShelfClick={() => setActiveTab('shelf')}
+        aheadCount={aheadCount}
+        behindCount={behindCount}
+        memoryMb={memoryMb}
       />
 
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
-        <Header
-          currentRepoName={activeRepo?.name || (native ? '未打开仓库' : 'easy-git')}
-          currentRepoPath={activeRepo?.path || (native ? '从左侧添加一个本地 Git 仓库' : '')}
-          currentBranch={currentBranch}
-          onOpenBranches={() => setIsBranchesOpen(true)}
-          onCommitClick={() => setActiveTab('commit')}
-          onUpdateClick={handleUpdate}
-          onPushClick={handlePush}
-          onFetchClick={handleFetch}
-          busyLabel={busyLabel}
-          operationsLocked={opsLocked}
-          onRollbackClick={() => {
-            if (!activeRepo || changes.length === 0) {
-              showToast('没有可回滚的更改', true);
-              return;
-            }
-            if (confirm(`回滚全部 ${changes.length} 个更改到 HEAD？此操作不可用普通撤销恢复。`)) {
-              void run('已回滚工作区', () => discardPaths(activeRepo.path, changes.map(file => file.path)));
-            }
-          }}
-          onShelfClick={() => setActiveTab('shelf')}
-          aheadCount={aheadCount}
-          behindCount={behindCount}
-          memoryMb={memoryMb}
-        />
-
-        <TabBar
-          activeTab={activeTab}
-          onTabChange={(tab) => {
-            setActiveTab(tab);
-            if (tab === 'merge') {
-              const first = changes.find(file => file.status === 'conflict');
-              if (first) void loadConflictFile(first.path);
-            }
-          }}
-          changesCount={changes.filter(c => c.isStaged).length}
-          gitVersion={gitVersion}
-        />
-
-        <main className="flex-1 flex overflow-hidden relative">
-          {!activeRepo && (
-            <div className="flex-1 flex items-center justify-center text-sm text-jb-text-muted">
-              还没有仓库。点击左侧 + 添加一个本地 Git 目录。
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        {/* 冲突检测全局警示条 */}
+        {activeRepo && changes.some(file => file.status === 'conflict') && activeTab !== 'merge' && (
+          <div className="h-8 bg-amber-500/15 border-b border-amber-500/30 px-3 flex items-center justify-between text-xs text-amber-200 shrink-0 z-10">
+            <div className="flex items-center space-x-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>
+                检测到 <strong className="text-amber-300 font-mono">{changes.filter(file => file.status === 'conflict').length}</strong> 个文件存在合并冲突，需要解决冲突后才能继续操作。
+              </span>
             </div>
-          )}
+            <button
+              onClick={() => {
+                setActiveTab('merge');
+                const first = changes.find(file => file.status === 'conflict');
+                if (first) void loadConflictFile(first.path);
+              }}
+              className="px-2.5 py-0.5 rounded bg-amber-500/30 hover:bg-amber-500/40 text-amber-200 border border-amber-500/50 font-medium transition-colors text-xs flex items-center space-x-1"
+            >
+              <GitMerge className="w-3 h-3 text-amber-300" />
+              <span>立即解决冲突</span>
+            </button>
+          </div>
+        )}
+
+        {!activeRepo && (
+          <div className="flex-1 flex flex-col items-center justify-center text-sm text-[#8C9099] space-y-3">
+            <FolderGit2 className="w-12 h-12 text-[#3574F0]/40 stroke-1" />
+            <p>当前未打开任何 Git 仓库</p>
+            <button
+              onClick={() => setIsAddRepoOpen(true)}
+              className="px-3.5 py-1.5 rounded bg-[#3574F0] hover:bg-[#3574F0]/90 text-white font-medium text-xs transition-colors shadow-sm"
+            >
+              + 添加本地 Git 仓库
+            </button>
+          </div>
+        )}
 
           {activeRepo && activeTab === 'log' && (
             <GitLogView
@@ -778,7 +799,6 @@ export function App() {
           encoding={fileEncoding}
           lineEnding={lineEnding}
         />
-      </div>
 
       <BranchesModal
         isOpen={isBranchesOpen}
@@ -804,6 +824,13 @@ export function App() {
           await toggleFavoriteBranch(activeRepo.path, branch.name);
           return branch.name;
         })}
+      />
+
+      <AddProjectModal
+        isOpen={isAddRepoOpen}
+        onClose={() => setIsAddRepoOpen(false)}
+        onAdd={(name, path) => { void handleAddRepo(name, path); }}
+        onBrowse={pickDirectory}
       />
 
       {diffTitle && (

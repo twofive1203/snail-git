@@ -10,7 +10,11 @@ import {
   List, 
   FolderTree, 
   ArrowUpRight, 
-  FileDiff 
+  FileDiff,
+  ChevronUp,
+  ChevronDown,
+  Minimize2,
+  Maximize2
 } from 'lucide-react';
 
 interface CommitDetailProps {
@@ -51,11 +55,12 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
   onSelectParent,
 }) => {
   const [isTreeView, setIsTreeView] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   if (!commit) {
     return (
-      <div className="h-64 border-t border-jb-border bg-jb-panel/40 flex items-center justify-center text-xs text-jb-text-muted">
-        Select a commit to view details and changed files
+      <div className="h-48 border-t border-[#303236] bg-[#1E1F22] flex items-center justify-center text-xs text-[#8C9099]">
+        选择一个提交以查看详细信息和修改文件
       </div>
     );
   }
@@ -63,24 +68,52 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
   const getStatusBadge = (status: FileChangeStatus) => {
     switch (status) {
       case 'modified':
-        return <span className="text-[10px] font-bold text-jb-blue font-mono px-1 bg-jb-blue/10 rounded">M</span>;
+        return <span className="text-[10px] font-bold text-blue-400 font-mono px-1 bg-blue-500/10 rounded">M</span>;
       case 'added':
-        return <span className="text-[10px] font-bold text-jb-green font-mono px-1 bg-jb-green/10 rounded">A</span>;
+        return <span className="text-[10px] font-bold text-emerald-400 font-mono px-1 bg-emerald-500/10 rounded">A</span>;
       case 'deleted':
-        return <span className="text-[10px] font-bold text-jb-red font-mono px-1 bg-jb-red/10 rounded line-through">D</span>;
+        return <span className="text-[10px] font-bold text-rose-400 font-mono px-1 bg-rose-500/10 rounded line-through">D</span>;
       default:
-        return <span className="text-[10px] font-bold text-jb-orange font-mono px-1">?</span>;
+        return <span className="text-[10px] font-bold text-amber-400 font-mono px-1">?</span>;
     }
   };
 
+  if (isCollapsed) {
+    return (
+      <div className="h-7 border-t border-[#303236] bg-[#1E1F22] px-3 flex items-center justify-between text-xs select-none shrink-0">
+        <div className="flex items-center space-x-2 truncate">
+          <span className="font-mono text-blue-400 font-medium">{commit.shortHash}</span>
+          <span className="text-[#DFE1E5] truncate font-medium">{commit.subject}</span>
+          <span className="text-[#8C9099] text-[11px]">({commit.files.length} 个文件)</span>
+        </div>
+        <button
+          onClick={() => setIsCollapsed(false)}
+          className="flex items-center space-x-1 text-[#8C9099] hover:text-[#DFE1E5] px-1.5 py-0.5 rounded hover:bg-[#2B2D30] text-[11px]"
+        >
+          <span>展开详情</span>
+          <ChevronUp className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-64 border-t border-jb-border bg-jb-panel flex flex-col md:flex-row text-xs select-none">
+    <div className="h-56 border-t border-[#303236] bg-[#1E1F22] flex flex-col md:flex-row text-xs select-none shrink-0 relative">
       {/* 左侧：提交元数据与提交说明 */}
-      <div className="w-full md:w-1/2 p-3 border-b md:border-b-0 md:border-r border-jb-border flex flex-col justify-between overflow-y-auto">
+      <div className="w-full md:w-1/2 p-3 border-b md:border-b-0 md:border-r border-[#303236] flex flex-col justify-between overflow-y-auto">
         <div className="space-y-2">
           {/* 标题 */}
-          <div className="font-semibold text-sm text-jb-text-primary leading-snug">
-            {commit.subject}
+          <div className="flex items-start justify-between gap-2">
+            <div className="font-semibold text-sm text-[#DFE1E5] leading-snug">
+              {commit.subject}
+            </div>
+            <button
+              onClick={() => setIsCollapsed(true)}
+              title="折叠详情面板"
+              className="p-1 rounded text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#2B2D30] shrink-0"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* 详细描述 */}

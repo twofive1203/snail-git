@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Filter, GitBranch, User, Calendar, FolderTree, RotateCcw } from 'lucide-react';
+import { Search, Filter, GitBranch, User, Calendar, FolderTree, RotateCcw, X } from 'lucide-react';
 
 interface FilterBarProps {
   searchQuery: string;
@@ -30,91 +30,126 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   branches,
   authors,
 }) => {
-  return (
-    <div className="h-9 bg-jb-panel/60 border-b border-jb-border flex items-center justify-between px-3 text-xs gap-2 select-none">
-      <div className="flex items-center space-x-2 flex-1 overflow-x-auto">
-        <span className="text-jb-text-muted flex items-center space-x-1 text-[11px] font-medium uppercase tracking-wider">
-          <Filter className="w-3 h-3 text-jb-blue" />
-          <span>Filter:</span>
-        </span>
+  const isFiltered = selectedBranch !== 'All' || selectedAuthor !== 'All' || selectedDate !== 'All' || pathQuery.trim() !== '' || searchQuery.trim() !== '';
 
-        {/* 分支过滤器 */}
-        <div className="flex items-center space-x-1 bg-jb-bg border border-jb-border rounded px-2 py-1 text-jb-text-primary hover:border-jb-borderHover">
-          <GitBranch className="w-3 h-3 text-jb-blue" />
-          <span className="text-jb-text-muted text-[11px]">Branch:</span>
+  const handleResetFilters = () => {
+    onBranchChange('All');
+    onAuthorChange('All');
+    onDateChange('All');
+    onPathChange('');
+    onSearchChange('');
+  };
+
+  return (
+    <div className="h-8 bg-[#1E1F22] border-b border-[#303236] flex items-center justify-between px-2.5 text-xs gap-2 select-none shrink-0">
+      {/* 左侧各维度筛选胶囊 */}
+      <div className="flex items-center space-x-1.5 flex-1 overflow-x-auto no-scrollbar">
+        {/* 分支筛选胶囊 */}
+        <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+          selectedBranch !== 'All' 
+            ? 'bg-[#3574F0]/20 border-[#3574F0] text-blue-300' 
+            : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
+        }`}>
+          <GitBranch className="w-3 h-3 text-[#3574F0] shrink-0" />
+          <span className="text-[#8C9099]">Branch:</span>
           <select 
             value={selectedBranch}
             onChange={(e) => onBranchChange(e.target.value)}
-            className="bg-transparent border-none text-xs focus:outline-none cursor-pointer text-jb-text-primary font-medium"
+            className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
-            <option value="All" className="bg-jb-panel">All Branches</option>
-            <option value="Head" className="bg-jb-panel">HEAD (Current)</option>
+            <option value="All" className="bg-[#2B2D30]">All Branches</option>
+            <option value="Head" className="bg-[#2B2D30]">HEAD (Current)</option>
             {branches.map(b => (
-              <option key={b} value={b} className="bg-jb-panel">{b}</option>
+              <option key={b} value={b} className="bg-[#2B2D30]">{b}</option>
             ))}
           </select>
         </div>
 
-        {/* 提交者过滤器 */}
-        <div className="flex items-center space-x-1 bg-jb-bg border border-jb-border rounded px-2 py-1 text-jb-text-primary hover:border-jb-borderHover">
-          <User className="w-3 h-3 text-emerald-400" />
-          <span className="text-jb-text-muted text-[11px]">User:</span>
+        {/* 作者筛选胶囊 */}
+        <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+          selectedAuthor !== 'All' 
+            ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300' 
+            : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
+        }`}>
+          <User className="w-3 h-3 text-emerald-400 shrink-0" />
+          <span className="text-[#8C9099]">User:</span>
           <select 
             value={selectedAuthor}
             onChange={(e) => onAuthorChange(e.target.value)}
-            className="bg-transparent border-none text-xs focus:outline-none cursor-pointer text-jb-text-primary font-medium"
+            className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
-            <option value="All" className="bg-jb-panel">All Users</option>
+            <option value="All" className="bg-[#2B2D30]">All Users</option>
             {authors.map(a => (
-              <option key={a} value={a} className="bg-jb-panel">{a}</option>
+              <option key={a} value={a} className="bg-[#2B2D30]">{a}</option>
             ))}
           </select>
         </div>
 
-        {/* 日期过滤器 */}
-        <div className="flex items-center space-x-1 bg-jb-bg border border-jb-border rounded px-2 py-1 text-jb-text-primary hover:border-jb-borderHover">
-          <Calendar className="w-3 h-3 text-purple-400" />
-          <span className="text-jb-text-muted text-[11px]">Date:</span>
+        {/* 日期筛选胶囊 */}
+        <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+          selectedDate !== 'All' 
+            ? 'bg-purple-500/20 border-purple-500 text-purple-300' 
+            : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
+        }`}>
+          <Calendar className="w-3 h-3 text-purple-400 shrink-0" />
+          <span className="text-[#8C9099]">Date:</span>
           <select
             value={selectedDate}
             onChange={(e) => onDateChange(e.target.value)}
-            className="bg-transparent border-none text-xs focus:outline-none cursor-pointer text-jb-text-primary font-medium"
+            className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
-            <option value="All" className="bg-jb-panel">All</option>
-            <option value="Today" className="bg-jb-panel">Today</option>
-            <option value="Last 7 Days" className="bg-jb-panel">Last 7 Days</option>
-            <option value="Last 30 Days" className="bg-jb-panel">Last 30 Days</option>
+            <option value="All" className="bg-[#2B2D30]">All</option>
+            <option value="Today" className="bg-[#2B2D30]">Today</option>
+            <option value="Last 7 Days" className="bg-[#2B2D30]">Last 7 Days</option>
+            <option value="Last 30 Days" className="bg-[#2B2D30]">Last 30 Days</option>
           </select>
         </div>
 
-        <div className="flex items-center space-x-1 bg-jb-bg border border-jb-border rounded px-2 py-1 text-jb-text-primary hover:border-jb-borderHover">
-          <FolderTree className="w-3 h-3 text-jb-orange" />
-          <span className="text-jb-text-muted text-[11px]">Paths:</span>
+        {/* 路径筛选胶囊 */}
+        <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+          pathQuery.trim() !== '' 
+            ? 'bg-amber-500/20 border-amber-500 text-amber-300' 
+            : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
+        }`}>
+          <FolderTree className="w-3 h-3 text-amber-400 shrink-0" />
+          <span className="text-[#8C9099]">Paths:</span>
           <input
             value={pathQuery}
             onChange={(e) => onPathChange(e.target.value)}
             placeholder="All"
-            className="w-28 bg-transparent border-none text-xs focus:outline-none text-jb-text-primary placeholder-jb-text-muted"
+            className="w-20 bg-transparent border-none text-[11px] focus:outline-none text-[#DFE1E5] placeholder-[#6F737A]"
           />
         </div>
+
+        {/* 重置过滤器 */}
+        {isFiltered && (
+          <button
+            onClick={handleResetFilters}
+            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#2B2D30] transition-colors"
+            title="重置所有筛选条件"
+          >
+            <RotateCcw className="w-2.5 h-2.5" />
+            <span>Reset</span>
+          </button>
+        )}
       </div>
 
-      {/* 关键字搜索框 */}
-      <div className="relative w-64">
-        <Search className="w-3.5 h-3.5 text-jb-text-muted absolute left-2.5 top-1/2 -translate-y-1/2" />
+      {/* 右侧关键词搜索框 */}
+      <div className="relative w-64 shrink-0">
+        <Search className="w-3 h-3 text-[#6F737A] absolute left-2 top-1/2 -translate-y-1/2" />
         <input 
           type="text"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search message, hash, author..."
-          className="w-full bg-jb-bg border border-jb-border rounded pl-8 pr-7 py-1 text-xs text-jb-text-primary placeholder-jb-text-muted focus:outline-none focus:border-jb-blue transition-colors"
+          placeholder="搜索提交说明、哈希、作者..."
+          className="w-full bg-[#2B2D30] border border-[#393B40] rounded pl-7 pr-6 py-0.5 text-xs text-[#DFE1E5] placeholder-[#6F737A] focus:outline-none focus:border-[#3574F0] transition-colors h-6"
         />
         {searchQuery && (
           <button 
             onClick={() => onSearchChange('')}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-jb-text-muted hover:text-jb-text-primary"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[#8C9099] hover:text-[#DFE1E5] p-0.5"
           >
-            ×
+            <X className="w-3 h-3" />
           </button>
         )}
       </div>
