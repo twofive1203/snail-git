@@ -1528,10 +1528,6 @@ pub fn word_spans(old: &str, new: &str) -> (Vec<WordSpanDto>, Vec<WordSpanDto>) 
     (coalesce_spans(old_spans), coalesce_spans(new_spans))
 }
 
-pub fn file_diff(repo: &str, path: &str) -> Result<Vec<DiffChunkDto>, String> {
-    file_diff_opts(repo, path, false)
-}
-
 pub fn file_diff_opts(repo: &str, path: &str, ignore_ws: bool) -> Result<Vec<DiffChunkDto>, String> {
     let top = validate_repo(repo)?;
     let rel = safe_rel(path)?;
@@ -2207,18 +2203,136 @@ fn incoming_paths(repo: &str) -> Result<Vec<String>, String> {
     Ok(text.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect())
 }
 
-/// 变基会在脏工作区上直接失败，所以只有变基策略需要提前提醒；合并策略交给真实探测。
-fn rebase_risk_message(overlap: &[String], tracked_dirty: &[String]) -> (bool, String, Vec<String>) {
-    if tracked_dirty.is_empty() {
-        return (false, String::new(), Vec::new());
-    }
-    let paths = if overlap.is_empty() { tracked_dirty.to_vec() } else { overlap.to_vec() };
-    let files = if paths.is_empty() { String::new() } else { format!("涉及 {}。", join_limited(&paths)) };
-    (
-        true,
-        format!("工作区有未提交修改，当前仓库配置为变基，继续可能失败。{files}仍要继续？"),
-        paths,
+fn overwrite_confirm_message(paths: &[String]) -> String {
+    format!(
+        "远程更新会覆盖你未提交的修改：{}。\n\n可以先把这些改动贮藏起来、更新完再自动恢复（推荐），或先取消自行处理。",
+        join_limited(paths)
     )
+}
+
+fn stash_entry_count(top: &str) -> Result<usize, String> {
+    let output = run_git(top, &["stash", "list"], Duration::from_secs(15))?;
+    let text = ensure_ok(&output, "读取贮藏")?;
+    Ok(text.lines().filter(|line| !line.trim().is_empty()).count())
+}
+
+/// 返回是否真的新建了贮藏。干净工作区时 `stash push` 仍以 0 退出，
+/// 不能据此去 apply，否则会弹出用户原先的贮藏。
+fn stash_update_changes(top: &str) -> Result<bool, String> {
+    let before = stash_entry_count(top)?;
+    let stash = run_git(
+        top,
+        &["stash", "push", "--include-untracked", "-m", "EasyGit update"],
+        Duration::from_secs(60),
+    )?;
+    if !stash.status.success() {
+        return Err(format!("贮藏本地改动失败：{}", lossy(&stash.stderr)));
+    }
+    Ok(stash_entry_count(top)? > before)
+}
+
+struct StashRestore {
+    applied: bool,
+    reason: String,
+    conflicts: Vec<String>,
+}
+
+fn restore_update_stash(top: &str) -> StashRestore {
+    let Ok(apply) = run_git(top, &["stash", "apply"], Duration::from_secs(60)) else {
+        return StashRestore {
+            applied: false,
+            reason: "无法恢复贮藏".into(),
+            conflicts: unmerged_paths(top),
+        };
+    };
+    if apply.status.success() {
+        let _ = run_git(top, &["stash", "drop"], Duration::from_secs(30));
+        let mut conflicts = unmerged_paths(top);
+        conflicts.sort();
+        conflicts.dedup();
+        return StashRestore {
+            applied: true,
+            reason: String::new(),
+            conflicts,
+        };
+    }
+    StashRestore {
+        applied: false,
+        reason: first_line(&lossy(&apply.stderr)),
+        conflicts: unmerged_paths(top),
+    }
+}
+
+fn outcome_after_stash_restore(
+    top: &str,
+    ahead: u32,
+    behind: u32,
+    remote: &str,
+    branch: &str,
+    strategy: &str,
+    prior_conflicts: Vec<String>,
+) -> SyncOutcome {
+    let restore = restore_update_stash(top);
+    if restore.applied {
+        let mut all = prior_conflicts;
+        all.extend(restore.conflicts);
+        all.sort();
+        all.dedup();
+        let message = if all.is_empty() {
+            "已更新，本地改动已自动恢复。".to_string()
+        } else {
+            format!("已更新。本地改动已恢复到工作区，{}请在三方合并里解决。", describe_conflict(&all))
+        };
+        return sync_outcome_with_strategy("ok", message, ahead, behind, remote, branch, all, strategy);
+    }
+    let reason = if restore.reason.is_empty() {
+        String::new()
+    } else {
+        format!("{}。", restore.reason)
+    };
+    sync_outcome_with_strategy(
+        "ok",
+        format!("已更新，但恢复本地改动时发生冲突，改动仍保存在贮藏里（stash@{{0}}）。{reason}"),
+        ahead,
+        behind,
+        remote,
+        branch,
+        prior_conflicts,
+        strategy,
+    )
+}
+
+fn git_path_exists(top: &str, name: &str) -> bool {
+    let Ok(output) = run_git(top, &["rev-parse", "--git-path", name], Duration::from_secs(8)) else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let path = lossy(&output.stdout);
+    if path.is_empty() {
+        return false;
+    }
+    let path = Path::new(&path);
+    let full = if path.is_absolute() { path.to_path_buf() } else { Path::new(top).join(path) };
+    full.exists()
+}
+
+fn rebase_in_progress(top: &str) -> bool {
+    git_path_exists(top, "rebase-merge") || git_path_exists(top, "rebase-apply")
+}
+
+fn rebase_blocked_by_local_changes(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("unstaged changes")
+        || lower.contains("uncommitted changes")
+        || lower.contains("local changes")
+        || lower.contains("would be overwritten")
+        || detail.contains("未暂存")
+        || detail.contains("未提交")
+        || detail.contains("本地修改")
+        || detail.contains("将被覆盖")
+        || detail.contains("会被覆盖")
 }
 
 /// 响应前端确认框：probe=首次尝试，abort=用户取消，stash=贮藏本地改动后重试，continue=带着本地改动继续。
@@ -2293,7 +2407,8 @@ enum MergeAttempt {
 }
 
 fn try_merge(top: &str, extra_args: &[&str], timeout: Duration) -> Result<MergeAttempt, String> {
-    let mut args: Vec<&str> = vec!["merge", "--no-ff", "--no-commit", "--no-edit"];
+    // 不带 --no-ff：本地没有独有提交时直接快进。--no-commit 不影响快进，只拦住分叉后的合并提交。
+    let mut args: Vec<&str> = vec!["merge", "--no-commit", "--no-edit"];
     args.extend_from_slice(extra_args);
     args.push("@{upstream}");
     let output = run_git(top, &args, timeout)?;
@@ -2380,17 +2495,16 @@ pub fn update_repo(
     let incoming = incoming_paths(&top)?;
     let overlap = overlapping_paths(&comparable, &incoming);
 
-    // 变基无法带着脏工作区跑，先按真实情况提个醒；用户确认后往下走。
-    if strategy != "merge" && action == "probe" && !dirty.tracked.is_empty() {
-        let (_, message, paths) = rebase_risk_message(&overlap, &dirty.tracked);
+    // 变基只在远程会改到未提交文件时询问。不重叠就直接变基，避免无谓贮藏。
+    if strategy != "merge" && action == "probe" && !overlap.is_empty() {
         return Ok(sync_outcome_with_strategy(
             "needs_confirm",
-            message,
+            overwrite_confirm_message(&overlap),
             ahead,
             behind,
             &remote,
             &branch,
-            paths,
+            overlap,
             strategy,
         ));
     }
@@ -2406,12 +2520,15 @@ pub fn update_repo(
                 on_progress("正在整理合并结果…");
                 let landed = commit_pending_merge(&top)?;
                 let (ahead, behind) = ahead_behind(&top);
+                // 快进不会留下 MERGE_HEAD，landed 为 none。不能靠英文 Fast-forward 判断，中文 Git 会把成功快进误报成已是最新。
                 let message = if !conflicts.is_empty() {
                     format!("{}\n\n请在三方合并里解决后提交。", describe_conflict(&conflicts))
-                } else if landed == "merge" || text.contains("Fast-forward") {
-                    command_summary_text(&text, "已更新")
+                } else if landed == "merge" {
+                    "已合并远程更新".into()
+                } else if behind == 0 {
+                    "已更新".into()
                 } else {
-                    "已是最新".into()
+                    command_summary_text(&text, "已更新")
                 };
                 return Ok(sync_outcome_with_strategy(
                     "ok",
@@ -2426,15 +2543,13 @@ pub fn update_repo(
             }
             MergeAttempt::Blocked { paths, .. } => {
                 let files = join_limited(&paths);
-                // “继续”时再弹一次同样的选择没意义，直接说清楚为什么仍然走不通。
+                // “继续”仍保留给旧调用：再弹一次同样的选择没意义，直接说清楚为什么仍然走不通。
                 let message = if action == "continue" {
                     format!(
                         "合并仍未执行：这些未提交改动会被远程更新覆盖（{files}）。请先提交、贮藏或撤销后再试。"
                     )
                 } else {
-                    format!(
-                        "远程更新会覆盖你未提交的修改：{files}。\n\n可以先把这些改动贮藏起来、更新完再自动恢复（推荐），或先取消自行处理。"
-                    )
+                    overwrite_confirm_message(&paths)
                 };
                 let status = if action == "continue" { "blocked" } else { "needs_confirm" };
                 return Ok(sync_outcome_with_strategy(
@@ -2454,70 +2569,111 @@ pub fn update_repo(
         }
     }
 
-    // merge 策略下的“贮藏后更新”先贮藏，再走一次干净的合并；变基则直接往下走。
-    if strategy == "merge" && action == "stash" {
-        let stash = run_git(
-            &top,
-            &["stash", "push", "--include-untracked", "-m", "EasyGit update"],
-            Duration::from_secs(60),
-        )?;
-        if !stash.status.success() {
-            let err = lossy(&stash.stderr);
-            return Err(format!("贮藏本地改动失败：{err}"));
+    // 走到这里的合并只剩“贮藏后更新”；变基则可能是直接更新，或用户已选择贮藏。
+    let mut created_stash = if action == "stash" {
+        let created = stash_update_changes(&top)?;
+        if created {
+            on_progress("已贮藏本地改动，正在集成远程更新…");
         }
-        on_progress("已贮藏本地改动，正在合并远程更新…");
-        // 贮藏后工作区应该是干净的；仍被挡住就如实报错，不要假装成功。
+        created
+    } else {
+        false
+    };
+
+    if strategy == "merge" {
+        on_progress("正在合并远程更新…");
         let attempt = try_merge(&top, &[], NETWORK_TIMEOUT)?;
         let conflicts = match attempt {
             MergeAttempt::Merged { conflicts, .. } => conflicts,
             MergeAttempt::Blocked { paths, detail } => {
                 let files = join_limited(&paths);
-                return Err(format!(
-                    "贮藏后合并仍被未提交改动挡住（{files}）。{detail}"
-                ));
+                let kept = stash_kept_note(&top, created_stash);
+                return Err(format!("贮藏后合并仍被未提交改动挡住（{files}）。{detail}{kept}"));
             }
             MergeAttempt::Failed { detail } => {
-                return Err(format!("合并远程更新失败：{detail}"));
+                let kept = stash_kept_note(&top, created_stash);
+                return Err(format!("合并远程更新失败：{detail}{kept}"));
             }
         };
-        // 有冲突就把待解决状态留在工作区（不打拒绝提交），交给三方合并器。
         if conflicts.is_empty() {
             commit_pending_merge(&top)?;
         }
         let (ahead, behind) = ahead_behind(&top);
-        // 用 apply 而不是 pop：冲突时 stash 条目仍在，不会丢改动。
-        let apply = run_git(&top, &["stash", "apply"], Duration::from_secs(60))?;
-        let message;
-        if apply.status.success() {
-            let _ = run_git(&top, &["stash", "drop"], Duration::from_secs(30));
-            let mut all = conflicts.clone();
-            all.extend(unmerged_paths(&top));
-            all.sort();
-            all.dedup();
-            message = if all.is_empty() {
-                "已更新，本地改动已自动恢复。".into()
-            } else {
-                format!("已更新。本地改动已恢复到工作区，{}请在三方合并里解决。", describe_conflict(&all))
-            };
+        if created_stash {
+            return Ok(outcome_after_stash_restore(
+                &top, ahead, behind, &remote, &branch, strategy, conflicts,
+            ));
+        }
+        let message = if conflicts.is_empty() {
+            "已更新".to_string()
+        } else {
+            format!("{}\n\n请在三方合并里解决后提交。", describe_conflict(&conflicts))
+        };
+        return Ok(sync_outcome_with_strategy(
+            "ok", message, ahead, behind, &remote, &branch, conflicts, strategy,
+        ));
+    }
+
+    on_progress("正在变基到远程更新…");
+    let mut output = run_update_rebase(&top, strategy, on_progress)?;
+    let mut stdout = lossy(&output.stdout);
+    let mut stderr = lossy(&output.stderr);
+    let mut detail = if stderr.is_empty() { stdout.clone() } else { stderr.clone() };
+    let mut conflicts = unmerged_paths(&top);
+    let mut rebasing = rebase_in_progress(&top);
+
+    // 有的 Git 只要工作区不干净就拒绝变基，即使远程没碰这些文件。
+    // 不重叠时静默贮藏再试，不再追问；重叠的情况已在前面问过。
+    if !output.status.success()
+        && conflicts.is_empty()
+        && !rebasing
+        && !created_stash
+        && overlap.is_empty()
+        && rebase_blocked_by_local_changes(&detail)
+    {
+        created_stash = stash_update_changes(&top)?;
+        if created_stash {
+            on_progress("工作区有未提交修改，已先贮藏再变基…");
+            output = run_update_rebase(&top, strategy, on_progress)?;
+            stdout = lossy(&output.stdout);
+            stderr = lossy(&output.stderr);
+            detail = if stderr.is_empty() { stdout.clone() } else { stderr.clone() };
+            conflicts = unmerged_paths(&top);
+            rebasing = rebase_in_progress(&top);
+        }
+    }
+
+    if !output.status.success() && conflicts.is_empty() && !rebasing {
+        if action == "probe" && !overlap.is_empty() && rebase_blocked_by_local_changes(&detail) {
             return Ok(sync_outcome_with_strategy(
-                "ok",
-                message,
+                "needs_confirm",
+                overwrite_confirm_message(&overlap),
                 ahead,
                 behind,
                 &remote,
                 &branch,
-                all,
+                overlap,
                 strategy,
             ));
         }
-        // apply 失败时 stash 条目仍保留，不至于丢改动。
-        let reason = first_line(&lossy(&apply.stderr));
-        message = format!(
-            "已更新，但恢复本地改动时发生冲突，改动仍保存在贮藏里（stash@{{0}}）。{}",
-            if reason.is_empty() { String::new() } else { format!("{reason}。") }
-        );
+        let kept = stash_kept_note(&top, created_stash);
+        let base = if detail.is_empty() { "变基失败".to_string() } else { format!("变基失败：{detail}") };
+        return Err(format!("{base}{kept}"));
+    }
+
+    // 内容冲突会让变基停下。此时不要把贮藏叠回去，避免和变基状态缠在一起。
+    if !conflicts.is_empty() || rebasing {
+        let (ahead, behind) = ahead_behind(&top);
+        let message = if created_stash {
+            format!(
+                "{}\n\n变基已停下。本地改动仍在贮藏里（stash@{{0}}），解决并继续变基后再恢复。",
+                describe_conflict(&conflicts)
+            )
+        } else {
+            format!("{}\n\n请在三方合并里解决后继续变基。", describe_conflict(&conflicts))
+        };
         return Ok(sync_outcome_with_strategy(
-            "ok",
+            "blocked",
             message,
             ahead,
             behind,
@@ -2528,32 +2684,16 @@ pub fn update_repo(
         ));
     }
 
-    // 变基路径（merge 策略的两种分支已在上面 return）。
-    on_progress("正在变基到远程更新…");
-
-    let output = match strategy {
-        "rebase-merges" => run_git_streaming(
-            &top,
-            &["rebase", "--rebase-merges", "--", "@{upstream}"],
-            NETWORK_TIMEOUT,
-            None,
-            on_progress,
-        )?,
-        _ => run_git_streaming(&top, &["rebase", "--", "@{upstream}"], NETWORK_TIMEOUT, None, on_progress)?,
-    };
-    let text = finish_network(&output, "变基")?;
-
-    // 变基碰到内容冲突会停下等用户解决，此时必须如实报告，不能当成成功。
-    let conflicts = unmerged_paths(&top);
-    let message = if conflicts.is_empty() {
-        command_summary_text(&text, "已更新")
-    } else {
-        format!("{}\n\n请在三方合并里解决后继续变基。", describe_conflict(&conflicts))
-    };
     let (ahead, behind) = ahead_behind(&top);
+    if created_stash {
+        return Ok(outcome_after_stash_restore(
+            &top, ahead, behind, &remote, &branch, strategy, conflicts,
+        ));
+    }
+    let text = if stdout.is_empty() { detail } else { stdout };
     Ok(sync_outcome_with_strategy(
-        if conflicts.is_empty() { "ok" } else { "blocked" },
-        message,
+        "ok",
+        command_summary_text(&text, "已更新"),
         ahead,
         behind,
         &remote,
@@ -2561,6 +2701,38 @@ pub fn update_repo(
         conflicts,
         strategy,
     ))
+}
+
+fn run_update_rebase(
+    top: &str,
+    strategy: &str,
+    on_progress: &mut dyn FnMut(&str),
+) -> Result<Output, String> {
+    match strategy {
+        "rebase-merges" => run_git_streaming(
+            top,
+            &["rebase", "--rebase-merges", "--", "@{upstream}"],
+            NETWORK_TIMEOUT,
+            None,
+            on_progress,
+        ),
+        _ => run_git_streaming(top, &["rebase", "--", "@{upstream}"], NETWORK_TIMEOUT, None, on_progress),
+    }
+}
+
+/// 贮藏后的集成失败时，尽量把改动放回工作区；放不回去就明确告诉用户它还在贮藏里。
+fn stash_kept_note(top: &str, created_stash: bool) -> String {
+    if !created_stash {
+        return String::new();
+    }
+    let restore = restore_update_stash(top);
+    if restore.applied && restore.conflicts.is_empty() {
+        "\n本地改动已从贮藏恢复。".into()
+    } else if restore.applied {
+        "\n本地改动已放回工作区，但和当前内容有冲突。".into()
+    } else {
+        "\n本地改动仍保存在贮藏里（stash@{0}）。".into()
+    }
 }
 
 fn command_summary_text(text: &str, fallback: &str) -> String {
@@ -3636,7 +3808,7 @@ mod tests {
         assert!(log[0].files.iter().any(|f| f.additions > 0), "commit file stats should come from numstat");
 
         fs::write(dir.join("a.txt"), "hello\nchanged\n").unwrap();
-        let diff = file_diff(&path, "a.txt").unwrap();
+        let diff = file_diff_opts(&path, "a.txt", false).unwrap();
         assert!(!diff.is_empty(), "expected a diff chunk");
         assert!(diff[0].lines.iter().any(|l| l.kind == "added"));
         apply_chunk(&path, &diff[0].raw_patch, "stage").unwrap();
@@ -3798,7 +3970,7 @@ mod tests {
         assert!(!asked.message.contains("overwritten"), "不应直接把 git 原文丢给用户：{}", asked.message);
         assert!(asked.conflicting_paths.iter().any(|path| path.ends_with("a.txt")));
 
-        // “不贮藏，直接更新”：仍然会被挡住，必须是 blocked，不能是 ok。
+        // 旧的 continue 调用仍会被挡住，必须是 blocked，不能是 ok。界面已不再提供这个选项。
         let continued = update_repo(&local_s, false, "continue", &mut |_| {}).unwrap();
         assert_eq!(continued.status, "blocked", "{}", continued.message);
         assert!(!continued.message.contains("overwritten"), "{}", continued.message);
@@ -3995,7 +4167,136 @@ mod tests {
         assert_eq!(dirty, "local-only\n");
         let merged = fs::read_to_string(local.join("b.txt")).unwrap().replace("\r\n", "\n");
         assert_eq!(merged, "v2\n");
+        assert!(head_matches_upstream(&local_s), "不重叠的落后更新应快进，而不是停在旧提交");
+        assert!(!is_merge_commit(&local_s), "能快进时不应制造合并提交");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 已提交、不领先、远程有新提交：直接快进，不出合并提交。
+    #[test]
+    fn update_fast_forwards_when_local_has_no_unique_commits() {
+        let (root, origin_s, local_s) = cloned_pair("easy-git-update-ff");
+        let origin = root.join("origin");
+        fs::write(origin.join("a.txt"), "v2\n").unwrap();
+        git_ok(&origin_s, &["add", "a.txt"]);
+        git_ok(&origin_s, &["commit", "-m", "v2"]);
+
+        let outcome = update_repo(&local_s, false, "probe", &mut |_| {}).unwrap();
+        assert_eq!(outcome.status, "ok", "{}", outcome.message);
+        assert!(head_matches_upstream(&local_s));
+        assert!(!is_merge_commit(&local_s), "{}", outcome.message);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 两边都有独有提交时仍要合并提交，不能因为允许快进就把分叉当成快进。
+    #[test]
+    fn update_creates_merge_commit_when_histories_diverge() {
+        let (root, origin_s, local_s) = cloned_pair("easy-git-update-diverge");
+        let origin = root.join("origin");
+        let local = root.join("local");
+        fs::write(origin.join("b.txt"), "remote\n").unwrap();
+        git_ok(&origin_s, &["add", "b.txt"]);
+        git_ok(&origin_s, &["commit", "-m", "remote file"]);
+        fs::write(local.join("a.txt"), "local-commit\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "local file"]);
+
+        let outcome = update_repo(&local_s, false, "probe", &mut |_| {}).unwrap();
+        assert_eq!(outcome.status, "ok", "{}", outcome.message);
+        assert!(is_merge_commit(&local_s), "分叉且无内容冲突时应创建合并提交");
+        assert_eq!(
+            fs::read_to_string(local.join("a.txt")).unwrap().replace("\r\n", "\n"),
+            "local-commit\n"
+        );
+        assert_eq!(
+            fs::read_to_string(local.join("b.txt")).unwrap().replace("\r\n", "\n"),
+            "remote\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_rebase_skips_confirm_when_dirty_file_is_untouched() {
+        let (root, origin_s, local_s) = cloned_pair("easy-git-update-rebase-clean");
+        let origin = root.join("origin");
+        let local = root.join("local");
+        git_ok(&local_s, &["config", "pull.rebase", "true"]);
+        fs::write(origin.join("b.txt"), "v2\n").unwrap();
+        git_ok(&origin_s, &["add", "b.txt"]);
+        git_ok(&origin_s, &["commit", "-m", "v2"]);
+        fs::write(local.join("a.txt"), "local-only\n").unwrap();
+
+        let outcome = update_repo(&local_s, false, "probe", &mut |_| {}).unwrap();
+        assert_eq!(outcome.status, "ok", "{}", outcome.message);
+        assert_ne!(outcome.status, "needs_confirm");
+        assert_eq!(
+            fs::read_to_string(local.join("a.txt")).unwrap().replace("\r\n", "\n"),
+            "local-only\n"
+        );
+        assert_eq!(
+            fs::read_to_string(local.join("b.txt")).unwrap().replace("\r\n", "\n"),
+            "v2\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_rebase_asks_then_stashes_overlapping_changes() {
+        let (root, origin_s, local_s) = cloned_pair("easy-git-update-rebase-overlap");
+        let origin = root.join("origin");
+        let local = root.join("local");
+        git_ok(&local_s, &["config", "pull.rebase", "true"]);
+        fs::write(origin.join("a.txt"), "v2\n").unwrap();
+        git_ok(&origin_s, &["add", "a.txt"]);
+        git_ok(&origin_s, &["commit", "-m", "v2"]);
+        fs::write(local.join("a.txt"), "local\n").unwrap();
+        let before = run_git(&local_s, &["rev-parse", "HEAD"], Duration::from_secs(8)).unwrap();
+
+        let asked = update_repo(&local_s, false, "probe", &mut |_| {}).unwrap();
+        assert_eq!(asked.status, "needs_confirm", "{}", asked.message);
+        assert_eq!(asked.strategy, "rebase");
+        let after = run_git(&local_s, &["rev-parse", "HEAD"], Duration::from_secs(8)).unwrap();
+        assert_eq!(lossy(&before.stdout), lossy(&after.stdout), "确认前不应变基");
+
+        let stashed = update_repo(&local_s, false, "stash", &mut |_| {}).unwrap();
+        assert_eq!(stashed.status, "ok", "{}", stashed.message);
+        let restored = fs::read_to_string(local.join("a.txt")).unwrap().replace("\r\n", "\n");
+        assert!(restored.contains("local"), "本地改动必须保住：{restored}");
+        assert!(head_matches_upstream(&local_s), "贮藏后应已变基到远程");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn cloned_pair(prefix: &str) -> (PathBuf, String, String) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("{prefix}-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let origin = root.join("origin");
+        let local = root.join("local");
+        init_repo(&origin);
+        let origin_s = origin.to_string_lossy().to_string();
+        fs::write(origin.join("a.txt"), "v1\n").unwrap();
+        fs::write(origin.join("b.txt"), "v1\n").unwrap();
+        git_ok(&origin_s, &["add", "."]);
+        git_ok(&origin_s, &["commit", "-m", "v1"]);
+        let root_s = root.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        git_ok(&root_s, &["clone", &origin_s, &local_s]);
+        (root, origin_s, local_s)
+    }
+
+    fn head_matches_upstream(repo: &str) -> bool {
+        let head = run_git(repo, &["rev-parse", "HEAD"], Duration::from_secs(8)).unwrap();
+        let upstream = run_git(repo, &["rev-parse", "@{upstream}"], Duration::from_secs(8)).unwrap();
+        lossy(&head.stdout) == lossy(&upstream.stdout)
+    }
+
+    fn is_merge_commit(repo: &str) -> bool {
+        let output = run_git(repo, &["rev-parse", "--verify", "-q", "HEAD^2"], Duration::from_secs(8)).unwrap();
+        output.status.success()
     }
 }
 

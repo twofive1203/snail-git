@@ -152,7 +152,7 @@ export async function rebaseOnto(repoPath: string, name: string): Promise<string
   return invokeTauri<string>('rebase_onto', { repoPath, name });
 }
 
-/** response: probe=首次尝试，stash=贮藏本地改动后重试，continue=带着本地改动继续，abort=取消。 */
+/** response: probe=首次尝试，stash=贮藏本地改动后重试，continue=旧调用保留的硬更新，abort=取消。界面不再提供 continue。 */
 export type UpdateResponse = 'probe' | 'stash' | 'continue' | 'abort';
 
 export async function updateRepo(repoPath: string, response: UpdateResponse = 'probe'): Promise<SyncOutcome> {
