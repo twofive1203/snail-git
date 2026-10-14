@@ -13,7 +13,7 @@ import { WindowResizeFrame } from './components/WindowControls';
 import { ShelveDialog } from './components/ShelfStashView/ShelveDialog';
 import { AddProjectModal } from './components/ProjectSidebar/AddProjectModal';
 import { DiffChunk, FileChange, GitRepository, RevisionFile, StashItem } from './types/git';
-import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive, GitPullRequest, ArrowUp } from 'lucide-react';
+import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive, ArrowUp } from 'lucide-react';
 import {
   addSavedRepo,
   appendGitignore,
@@ -53,7 +53,6 @@ import {
   setWatchPath,
   setWatchPaused,
   shelfPatchFiles,
-  smartMergeConflict,
   stashPatchFiles,
   stashSave,
   stagePaths,
@@ -84,21 +83,14 @@ interface PendingConfirm {
   outcome: SyncOutcome;
 }
 
-/** 合并策略下的真实冲突：两种做法都是安全的（贮藏可回滚），所以推荐“贮藏后更新”。 */
+/** 远程会覆盖未提交改动时只提供贮藏。不贮藏再试必然失败，变基也不再单独给“仍然变基”。 */
 const confirmActions = (pending: PendingConfirm | null): ConfirmAction[] => {
   if (!pending) return [];
   if (pending.kind === 'push') {
     return [{ value: 'continue', label: '确认并推送', tone: 'primary', icon: <ArrowUp className="w-3.5 h-3.5" /> }];
   }
-  const outcome = pending.outcome;
-  if (outcome.strategy && outcome.strategy !== 'merge') {
-    return [
-      { value: 'continue', label: '仍然变基', tone: 'primary', icon: <GitPullRequest className="w-3.5 h-3.5" /> },
-    ];
-  }
   return [
     { value: 'stash', label: '贮藏后更新（推荐）', tone: 'primary', icon: <Archive className="w-3.5 h-3.5" /> },
-    { value: 'continue', label: '不贮藏，直接更新', tone: 'default', icon: <GitMerge className="w-3.5 h-3.5" /> },
   ];
 };
 
@@ -132,7 +124,10 @@ export function App() {
   const [conflictPath, setConflictPath] = useState('');
   const [conflictOurs, setConflictOurs] = useState('');
   const [conflictTheirs, setConflictTheirs] = useState('');
-  const [conflictResult, setConflictResult] = useState('');
+  const [conflictBase, setConflictBase] = useState('');
+  const [conflictWorking, setConflictWorking] = useState('');
+  const [conflictLoading, setConflictLoading] = useState(false);
+  const [conflictGen, setConflictGen] = useState(0);
   const [diffTitle, setDiffTitle] = useState('');
   const [diffFiles, setDiffFiles] = useState<RevisionFile[]>([]);
   const diffLoader = useRef<(path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>>(async () => []);
@@ -216,9 +211,9 @@ export function App() {
   const run = useCallback(async (label: string, action: () => Promise<string | void>) => {
     if (!isTauriEnvironment() || !activeRepo) {
       showToast('浏览器预览不会改动真实仓库，请用 pnpm tauri dev', true);
-      return;
+      return false;
     }
-    if (opLock.current) return;
+    if (opLock.current) return false;
     opLock.current = true;
     setOpsLocked(true);
     setBusyLabel('正在执行…');
@@ -227,10 +222,12 @@ export function App() {
       showToast(text ? `${label}：${String(text).split('\n')[0]}` : label);
       setBusyLabel(null);
       await refresh(activeRepo.path);
+      return true;
     } catch (err) {
       showToast(String(err), true);
       setBusyLabel(null);
       await refresh(activeRepo.path);
+      return false;
     } finally {
       releaseOp();
     }
@@ -324,7 +321,7 @@ export function App() {
         return;
       }
       if (outcome.status === 'needs_confirm') {
-        // 变基的脏工作区提醒是二次确认，再弹一次即可。
+        // 贮藏后若仍被挡住，再把选择权交回去。
         acceptProgress.current = false;
         setBusyLabel(null);
         setSyncAction(null);
@@ -524,13 +521,18 @@ export function App() {
   const loadConflictFile = useCallback(async (path: string) => {
     if (!isTauriEnvironment() || !activeRepo || !path) return;
     setConflictPath(path);
+    setConflictLoading(true);
     try {
       const view = await loadConflict(activeRepo.path, path);
       setConflictOurs(view.ours);
       setConflictTheirs(view.theirs);
-      setConflictResult(view.working);
+      setConflictBase(view.base);
+      setConflictWorking(view.working);
+      setConflictGen(gen => gen + 1);
     } catch (err) {
       showToast(String(err), true);
+    } finally {
+      setConflictLoading(false);
     }
   }, [activeRepo]);
 
@@ -886,23 +888,28 @@ export function App() {
               isOpen
               files={changes.filter(file => file.status === 'conflict').map(file => ({ path: file.path }))}
               activePath={conflictPath}
+              base={conflictBase}
               ours={conflictOurs}
               theirs={conflictTheirs}
-              result={conflictResult}
+              working={conflictWorking}
+              loading={conflictLoading}
+              sessionKey={String(conflictGen)}
               onSelectFile={(path) => { void loadConflictFile(path); }}
-              onResultChange={setConflictResult}
-              onAcceptLeft={() => setConflictResult(conflictOurs)}
-              onAcceptRight={() => setConflictResult(conflictTheirs)}
-              onSmartMerge={() => {
-                if (!isTauriEnvironment() || !conflictPath) {
-                  showToast('浏览器预览不能合并真实冲突', true);
-                  return;
-                }
-                void smartMergeConflict(activeRepo.path, conflictPath).then(setConflictResult).catch(err => showToast(String(err), true));
-              }}
-              onSave={() => {
+              onSave={(content) => {
                 if (!conflictPath) return;
-                void run('冲突已解决', () => resolveConflict(activeRepo.path, conflictPath, conflictResult));
+                const next = changes.find(file => file.status === 'conflict' && file.path !== conflictPath)?.path ?? '';
+                void (async () => {
+                  const ok = await run('冲突已解决', () => resolveConflict(activeRepo.path, conflictPath, content));
+                  if (!ok) return;
+                  if (next) await loadConflictFile(next);
+                  else {
+                    setConflictPath('');
+                    setConflictBase('');
+                    setConflictOurs('');
+                    setConflictTheirs('');
+                    setConflictWorking('');
+                  }
+                })();
               }}
               onClose={() => setActiveTab('commit')}
             />
