@@ -67,7 +67,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         <button
           type="button"
           onClick={() => onBranchChange(headActive ? 'All' : 'Head')}
-          title="当前分支：只看 HEAD 所在提交"
+          title="当前分支：只看从 HEAD 可达的提交历史"
           className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 transition-colors ${
             headActive
               ? 'bg-[#3574F0]/20 border-[#3574F0] text-blue-300'

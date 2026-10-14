@@ -20,6 +20,44 @@ interface GitLogViewProps {
   currentUser?: string;
 }
 
+function decorationName(ref: string): string {
+  return ref.replace(/^HEAD -> /, '').replace(/^tag: /, '').trim();
+}
+
+function pointsAtHead(ref: string): boolean {
+  return ref === 'HEAD' || ref.startsWith('HEAD ->');
+}
+
+function commitIsRefTip(commit: GitCommit, selectedBranch: string): boolean {
+  if (selectedBranch === 'Head') return commit.refs.some(pointsAtHead);
+  return commit.refs.some(ref => decorationName(ref) === selectedBranch);
+}
+
+function findLoadedCommit(commits: GitCommit[], hash: string): GitCommit | undefined {
+  return commits.find(commit =>
+    commit.hash === hash ||
+    commit.shortHash === hash ||
+    commit.hash.startsWith(hash) ||
+    hash.startsWith(commit.hash),
+  );
+}
+
+// git 只把分支/tag 装饰标在尖端。筛选分支要沿 parents 收集可达提交，不能只留尖端那一条。
+function hashesReachableFromRef(commits: GitCommit[], selectedBranch: string): Set<string> {
+  const seen = new Set<string>();
+  const stack = commits.filter(commit => commitIsRefTip(commit, selectedBranch));
+  while (stack.length > 0) {
+    const commit = stack.pop();
+    if (!commit || seen.has(commit.hash)) continue;
+    seen.add(commit.hash);
+    for (const parent of commit.parents) {
+      const resolved = findLoadedCommit(commits, parent);
+      if (resolved && !seen.has(resolved.hash)) stack.push(resolved);
+    }
+  }
+  return seen;
+}
+
 function matchesDate(date: string, range: string): boolean {
   if (range === 'All') return true;
   const parsed = Date.parse(date.replace(' ', 'T'));
@@ -77,6 +115,9 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
 
   // 综合过滤
   const filteredCommits = useMemo(() => {
+    const onSelectedBranch = selectedBranch === 'All'
+      ? null
+      : hashesReachableFromRef(commits, selectedBranch);
     return commits.filter(commit => {
       // 搜索框匹配（message, hash, author）
       if (searchQuery.trim()) {
@@ -92,14 +133,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         return false;
       }
 
-      // 分支匹配
-      if (selectedBranch !== 'All') {
-        if (selectedBranch === 'Head') {
-          if (!commit.refs.some(r => r.includes('HEAD'))) return false;
-        } else {
-          if (!commit.refs.some(r => r.includes(selectedBranch))) return false;
-        }
-      }
+      if (onSelectedBranch && !onSelectedBranch.has(commit.hash)) return false;
 
       if (!matchesDate(commit.date, selectedDate)) return false;
       if (pathQuery.trim()) {
