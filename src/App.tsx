@@ -13,8 +13,9 @@ import { WindowResizeFrame } from './components/WindowControls';
 import { ShelveDialog } from './components/ShelfStashView/ShelveDialog';
 import { AddProjectModal, type CloneRequest } from './components/ProjectSidebar/AddProjectModal';
 import { RemotesModal } from './components/RemotesModal';
+import { PushDialog } from './components/PushDialog';
 import { DiffChunk, FileChange, GitRepository, GitTag, RevisionFile, StashItem } from './types/git';
-import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive, ArrowUp } from 'lucide-react';
+import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive } from 'lucide-react';
 import {
   addSavedRepo,
   appendGitignore,
@@ -45,7 +46,7 @@ import {
   mergeBranch,
   pickDirectory,
   processMemoryMb,
-  pushRepo,
+  pushTo,
   rebaseOnto,
   removeSavedRepo,
   renameBranch,
@@ -66,6 +67,7 @@ import {
   unshelve,
   unstagePaths,
   updateRepo,
+  type PushTarget,
   type SyncOutcome,
   type UpdateResponse,
 } from './services/gitService';
@@ -95,9 +97,6 @@ const confirmActions = (
   label: (key: MessageKey) => string,
 ): ConfirmAction[] => {
   if (!pending) return [];
-  if (pending.kind === 'push') {
-    return [{ value: 'continue', label: label('confirm.push'), tone: 'primary', icon: <ArrowUp className="w-3.5 h-3.5" /> }];
-  }
   return [
     { value: 'stash', label: label('confirm.stashUpdate'), tone: 'primary', icon: <Archive className="w-3.5 h-3.5" /> },
   ];
@@ -145,6 +144,9 @@ export function App() {
   const diffLoader = useRef<(path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>>(async () => []);
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  const [pushOpen, setPushOpen] = useState(false);
+  const [pushError, setPushError] = useState('');
+  const [pushRefreshKey, setPushRefreshKey] = useState(0);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [opsLocked, setOpsLocked] = useState(false);
   const refreshLock = useRef(false);
@@ -296,18 +298,39 @@ export function App() {
   }, [guardNetwork, refresh]);
 
   const handlePush = useCallback(() => {
+    if (!isTauriEnvironment() || !activeRepo) {
+      showToast(t('toast.previewNoWrite'), true);
+      return;
+    }
+    setPushError('');
+    setPushRefreshKey(key => key + 1);
+    setPushOpen(true);
+  }, [activeRepo, t]);
+
+  const confirmPush = useCallback((target: PushTarget) => {
+    setPushError('');
     void guardNetwork('push', async (repoPath) => {
-      const outcome = await pushRepo(repoPath, false);
-      if (outcome.status === 'needs_confirm') {
+      try {
+        const outcome = await pushTo(repoPath, target.remote, target.branch, target.setUpstream);
+        if (outcome.status === 'ok' || outcome.status === 'up_to_date') {
+          setPushOpen(false);
+          await finishNetwork(repoPath, outcome);
+          return;
+        }
+        applySyncCounts(repoPath, outcome);
+        setPushError(outcome.message);
+        showToast(outcome.message || t('common.done'), true);
         acceptProgress.current = false;
         setBusyLabel(null);
-        setSyncAction(null);
-        setPendingConfirm({ kind: 'push', repoPath, outcome });
-        return;
+        await refresh(repoPath);
+      } catch (err) {
+        const message = String(err);
+        setPushError(message);
+        showToast(message, true);
+        await refresh(repoPath);
       }
-      await finishNetwork(repoPath, outcome);
     });
-  }, [guardNetwork, refresh]);
+  }, [guardNetwork, refresh, t]);
 
   const cancelConfirm = useCallback(() => {
     setPendingConfirm(null);
@@ -318,14 +341,6 @@ export function App() {
     const pending = pendingConfirm;
     if (!pending) return;
     setPendingConfirm(null);
-    if (pending.kind === 'push') {
-      // 推进程的确认只有“继续”一种意思，其余选项都在弹窗里带 cancel。
-      void guardNetwork('push', async (repoPath) => {
-        const outcome = await pushRepo(repoPath, true);
-        await finishNetwork(repoPath, outcome);
-      });
-      return;
-    }
     void guardNetwork('update', async (repoPath) => {
       const outcome = await updateRepo(repoPath, value as UpdateResponse);
       if (outcome.status === 'cancelled') {
@@ -677,12 +692,13 @@ export function App() {
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
     };
     const onKey = (e: KeyboardEvent) => {
-      const overlayOpen = Boolean(shelveDraft) || Boolean(diffTitle) || isAddRepoOpen || isBranchesOpen || isRemotesOpen;
+      const overlayOpen = Boolean(shelveDraft) || Boolean(diffTitle) || pushOpen || isAddRepoOpen || isBranchesOpen || isRemotesOpen;
       if (e.key === 'Escape') {
         if (shelveDraft) setShelveDraft(null);
         else if (diffTitle) setDiffTitle('');
-        else if (isAddRepoOpen && !opsLocked) setIsAddRepoOpen(false);
         else if (isRemotesOpen && !opsLocked) setIsRemotesOpen(false);
+        else if (pushOpen && !opsLocked) setPushOpen(false);
+        else if (isAddRepoOpen && !opsLocked) setIsAddRepoOpen(false);
         else if (isBranchesOpen) setIsBranchesOpen(false);
         else if (typingTarget(e.target)) (e.target as HTMLElement).blur();
         window.dispatchEvent(new Event('easygit:dismiss'));
@@ -712,7 +728,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [handlePush, handleUpdate, focusList, shelveDraft, diffTitle, isAddRepoOpen, isBranchesOpen, isRemotesOpen, opsLocked]);
+  }, [handlePush, handleUpdate, focusList, shelveDraft, diffTitle, pushOpen, isAddRepoOpen, isBranchesOpen, isRemotesOpen, opsLocked]);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
@@ -840,9 +856,20 @@ export function App() {
                 const body = head.body?.trim();
                 return body ? `${head.subject}\n\n${body}` : head.subject;
               })()}
-              onCommit={(msg, amend, andPush) => void run(andPush ? t('toast.committedAndPushed') : t('toast.committed'), () =>
-                commitChanges(activeRepo.path, msg, amend, andPush)
-              )}
+              onCommit={(msg, amend, andPush) => {
+                // IDEA 的提交并推送会先落本地提交，再打开推送预览，而不是直接推。
+                void (async () => {
+                  const ok = await run(
+                    andPush ? t('toast.committedThenPush') : t('toast.committed'),
+                    () => commitChanges(activeRepo.path, msg, amend, false),
+                  );
+                  if (ok && andPush) {
+                    setPushError('');
+                    setPushRefreshKey(key => key + 1);
+                    setPushOpen(true);
+                  }
+                })();
+              }}
               onAddToGitignore={(path) => void run(t('toast.gitignore'), () => appendGitignore(activeRepo.path, path))}
               onDeleteUnversioned={(file) => void run(t('toast.fileDeleted'), () => deleteUnversioned(activeRepo.path, file.path))}
               onShelve={openShelve}
@@ -1028,6 +1055,22 @@ export function App() {
         busyLabel={busyLabel}
       />
 
+      <PushDialog
+        open={pushOpen && Boolean(activeRepo)}
+        repoPath={activeRepo?.path || ''}
+        refreshKey={pushRefreshKey}
+        busy={opsLocked && syncAction === 'push'}
+        error={pushError}
+        onClose={() => {
+          if (!opsLocked) setPushOpen(false);
+        }}
+        onPush={confirmPush}
+        onOpenFile={(hash, path, shortHash) => {
+          void openRevision(`${shortHash} ${path}`, hash, 'commit', path);
+        }}
+        onManageRemotes={() => setIsRemotesOpen(true)}
+      />
+
       <RemotesModal
         isOpen={isRemotesOpen && Boolean(activeRepo)}
         repoPath={activeRepo?.path || ''}
@@ -1038,6 +1081,7 @@ export function App() {
         onFetch={handleFetchRemote}
         onChanged={() => {
           if (activeRepo) void refresh(activeRepo.path);
+          setPushRefreshKey(key => key + 1);
         }}
       />
 
@@ -1074,7 +1118,6 @@ export function App() {
         title={pendingConfirm?.kind === 'push' ? t('confirm.pushTitle') : t('confirm.updateTitle')}
         message={pendingConfirm?.outcome.message || ''}
         files={pendingConfirm?.outcome.conflictingPaths}
-        filesHint={pendingConfirm?.kind === 'push' ? t('confirm.pushFiles') : undefined}
         actions={confirmActions(pendingConfirm, t)}
         onChoose={chooseConfirm}
         onCancel={cancelConfirm}

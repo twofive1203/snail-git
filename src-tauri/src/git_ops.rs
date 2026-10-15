@@ -2877,6 +2877,381 @@ pub fn push_repo(repo: &str, allow_set_upstream: bool, on_progress: &mut dyn FnM
     ))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushPreview {
+    pub local_branch: String,
+    pub remote: String,
+    pub target_branch: String,
+    pub has_upstream: bool,
+    pub upstream_remote: String,
+    pub upstream_branch: String,
+    pub target_exists: bool,
+    pub will_set_upstream: bool,
+    pub remotes: Vec<String>,
+    pub remote_branches: Vec<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub truncated: bool,
+    pub commits: Vec<GitCommitDto>,
+}
+
+fn split_upstream(upstream: &str) -> (String, String) {
+    match upstream.split_once('/') {
+        Some((remote, branch)) if !remote.is_empty() && !branch.is_empty() => {
+            (remote.to_string(), branch.to_string())
+        }
+        _ => (String::new(), String::new()),
+    }
+}
+
+fn ref_exists(repo: &str, rev: &str) -> bool {
+    run_git(repo, &["rev-parse", "--verify", "--quiet", rev], Duration::from_secs(8))
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// 推送目标会拼进 `local:remote` refspec，冒号和通配符不能交给 Git 解释。
+fn validate_push_branch(name: &str) -> Result<(), String> {
+    validate_branch_name(name)?;
+    if name.contains(':')
+        || name.contains('^')
+        || name.contains('~')
+        || name.contains('?')
+        || name.contains('*')
+        || name.contains('[')
+        || name.contains("@{")
+        || name.starts_with('/')
+    {
+        return Err(format!("无效的分支名：{name}"));
+    }
+    Ok(())
+}
+
+fn list_remote_branch_names(repo: &str, remote: &str) -> Vec<String> {
+    let prefix = format!("refs/remotes/{remote}/");
+    let Ok(output) = run_git(
+        repo,
+        &["for-each-ref", "--format=%(refname:short)", &prefix],
+        Duration::from_secs(8),
+    ) else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let short_prefix = format!("{remote}/");
+    let mut names: Vec<String> = lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.ends_with("/HEAD") {
+                return None;
+            }
+            let name = line.strip_prefix(&short_prefix).unwrap_or(line);
+            if name.is_empty() || name == "HEAD" {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn left_right_count(repo: &str, range: &str) -> (u32, u32) {
+    let Ok(output) = run_git(
+        repo,
+        &["rev-list", "--left-right", "--count", range],
+        Duration::from_secs(15),
+    ) else {
+        return (0, 0);
+    };
+    if !output.status.success() {
+        return (0, 0);
+    }
+    let text = lossy(&output.stdout);
+    let mut parts = text.split_whitespace();
+    let left = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    let right = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    (left, right)
+}
+
+fn rev_list_count(repo: &str, args: &[&str]) -> u32 {
+    let mut full = vec!["rev-list", "--count"];
+    full.extend_from_slice(args);
+    let Ok(output) = run_git(repo, &full, Duration::from_secs(15)) else {
+        return 0;
+    };
+    if !output.status.success() {
+        return 0;
+    }
+    lossy(&output.stdout).trim().parse().unwrap_or(0)
+}
+
+fn parse_push_commits(text: &str) -> Vec<GitCommitDto> {
+    let mut commits = Vec::new();
+    for block in text.split("COMMIT\x1f") {
+        if block.trim().is_empty() {
+            continue;
+        }
+        let (meta, rest) = block.split_once('\x1e').unwrap_or((block, ""));
+        let fields: Vec<&str> = meta.split('\x1f').collect();
+        if fields.len() < 9 {
+            continue;
+        }
+        let parents = fields[2]
+            .split_whitespace()
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
+            .collect();
+        let refs = fields[7]
+            .split(", ")
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
+            .collect();
+        let body = if fields.len() > 9 {
+            let text = fields[9..].join("\x1f").trim().to_string();
+            if text.is_empty() { None } else { Some(text) }
+        } else {
+            None
+        };
+        let mut files = Vec::new();
+        for line in rest.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut cols = line.split('\t');
+            let code = cols.next().unwrap_or("");
+            let path = cols.next().unwrap_or("").to_string();
+            if path.is_empty() {
+                continue;
+            }
+            let new_path = cols.next().unwrap_or("").to_string();
+            let display = if new_path.is_empty() { path } else { new_path };
+            let status = match code.chars().next().unwrap_or('M') {
+                'A' => "added",
+                'D' => "deleted",
+                'U' => "conflict",
+                _ => "modified",
+            };
+            files.push(CommitFileDto {
+                filename: filename_of(&display),
+                path: display.replace('\\', "/"),
+                status: status.into(),
+                additions: 0,
+                deletions: 0,
+            });
+        }
+        commits.push(GitCommitDto {
+            hash: fields[0].to_string(),
+            short_hash: fields[1].to_string(),
+            subject: fields[8].to_string(),
+            body,
+            author: fields[3].to_string(),
+            author_email: fields[4].to_string(),
+            date: fields[5].to_string(),
+            relative_date: fields[6].to_string(),
+            parents,
+            refs,
+            branch_track: 0,
+            files,
+        });
+    }
+    commits
+}
+
+fn fill_range_numstat(repo: &str, rev_args: &[&str], commits: &mut [GitCommitDto]) {
+    if commits.is_empty() {
+        return;
+    }
+    let mut args = vec![
+        "log".to_string(),
+        "-n".to_string(),
+        "201".to_string(),
+        "--numstat".to_string(),
+        "--pretty=format:%H".to_string(),
+    ];
+    args.extend(rev_args.iter().map(|item| (*item).to_string()));
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = match run_git(repo, &refs, Duration::from_secs(20)) {
+        Ok(output) if output.status.success() => lossy(&output.stdout),
+        _ => return,
+    };
+    let mut current = String::new();
+    let mut stats: std::collections::HashMap<String, Vec<(i32, i32, String)>> = std::collections::HashMap::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !line.contains('\t') && line.chars().all(|ch| ch.is_ascii_hexdigit()) && line.len() >= 7 {
+            current = line.to_string();
+            continue;
+        }
+        if current.is_empty() {
+            continue;
+        }
+        let mut cols = line.split('\t');
+        let additions = cols.next().unwrap_or("0").parse::<i32>().unwrap_or(0);
+        let deletions = cols.next().unwrap_or("0").parse::<i32>().unwrap_or(0);
+        let path = cols.next().unwrap_or("").replace('\\', "/");
+        if path.is_empty() {
+            continue;
+        }
+        stats.entry(current.clone()).or_default().push((additions, deletions, path));
+    }
+    for commit in commits.iter_mut() {
+        let Some(rows) = stats.get(&commit.hash) else {
+            continue;
+        };
+        for file in &mut commit.files {
+            let wanted = file.path.replace('\\', "/");
+            if let Some((additions, deletions, _)) = rows.iter().find(|(_, _, path)| numstat_matches(&wanted, path)) {
+                file.additions = *additions;
+                file.deletions = *deletions;
+            }
+        }
+    }
+}
+
+fn log_range_commits(repo: &str, rev_args: &[&str]) -> Result<(Vec<GitCommitDto>, bool), String> {
+    let mut args = vec![
+        "log".to_string(),
+        "-n".to_string(),
+        "201".to_string(),
+        "--date=format:%Y-%m-%d %H:%M:%S".to_string(),
+        "--name-status".to_string(),
+        "--pretty=format:COMMIT%x1f%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%ar%x1f%D%x1f%s%x1f%b%x1e".to_string(),
+    ];
+    args.extend(rev_args.iter().map(|item| (*item).to_string()));
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = run_git(repo, &refs, Duration::from_secs(20))?;
+    let text = ensure_ok(&output, "读取待推送提交")?;
+    let mut commits = parse_push_commits(&text);
+    let truncated = commits.len() > 200;
+    if truncated {
+        commits.truncate(200);
+    }
+    fill_range_numstat(repo, rev_args, &mut commits);
+    Ok((commits, truncated))
+}
+
+/// 推送前预览。默认目标跟 IDEA：已有上游则用上游，否则用 origin（或唯一远程）加本地同名分支。
+/// 提交列表只读本地远程跟踪引用，不上网。
+pub fn preview_push(repo: &str, remote: Option<&str>, branch: Option<&str>) -> Result<PushPreview, String> {
+    let top = validate_repo(repo)?;
+    let (local, _) = require_branch(&top)?;
+    validate_push_branch(&local)?;
+    let known = remotes(&top)?;
+    if known.is_empty() {
+        return Err("没有配置远程仓库".into());
+    }
+    let upstream = upstream_ref(&top);
+    let (up_remote, up_branch) = upstream.as_deref().map(split_upstream).unwrap_or_default();
+    let remote = if let Some(name) = remote.map(str::trim).filter(|name| !name.is_empty()) {
+        validate_remote_name(name)?;
+        if !known.iter().any(|item| item == name) {
+            return Err(format!("远程 {name} 不存在"));
+        }
+        name.to_string()
+    } else if !up_remote.is_empty() && known.iter().any(|item| item == &up_remote) {
+        up_remote.clone()
+    } else {
+        choose_remote(&top, &local)?
+    };
+    let target = if let Some(name) = branch.map(str::trim).filter(|name| !name.is_empty()) {
+        validate_push_branch(name)?;
+        name.to_string()
+    } else if remote == up_remote && !up_branch.is_empty() {
+        up_branch.clone()
+    } else {
+        local.clone()
+    };
+    let remote_ref = format!("refs/remotes/{remote}/{target}");
+    let target_exists = ref_exists(&top, &remote_ref);
+    let (ahead, behind, rev_args_owned) = if target_exists {
+        let range = format!("HEAD...{remote_ref}");
+        let (ahead, behind) = left_right_count(&top, &range);
+        (ahead, behind, vec![format!("{remote_ref}..HEAD")])
+    } else {
+        // 远程还没有这个分支时，列出尚未出现在该远程跟踪分支上的提交。
+        let not_remote = format!("--remotes={remote}");
+        let ahead = rev_list_count(&top, &["HEAD", "--not", &not_remote]);
+        (ahead, 0, vec!["HEAD".into(), "--not".into(), not_remote])
+    };
+    let rev_args: Vec<&str> = rev_args_owned.iter().map(String::as_str).collect();
+    let (commits, truncated) = if ahead == 0 && target_exists {
+        (Vec::new(), false)
+    } else {
+        log_range_commits(&top, &rev_args)?
+    };
+    let remote_branches = list_remote_branch_names(&top, &remote);
+    Ok(PushPreview {
+        local_branch: local,
+        will_set_upstream: up_remote != remote || up_branch != target,
+        has_upstream: upstream.is_some(),
+        upstream_remote: up_remote,
+        upstream_branch: up_branch,
+        target_exists,
+        remotes: known,
+        remote_branches,
+        ahead,
+        behind,
+        truncated,
+        commits,
+        remote,
+        target_branch: target,
+    })
+}
+
+pub fn push_to(
+    repo: &str,
+    remote: &str,
+    branch: &str,
+    set_upstream: bool,
+    on_progress: &mut dyn FnMut(&str),
+) -> Result<SyncOutcome, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let (local, _) = require_branch(&top)?;
+    let remote = remote.trim();
+    let branch = branch.trim();
+    validate_remote_name(remote)?;
+    validate_push_branch(&local)?;
+    validate_push_branch(branch)?;
+    let known = remotes(&top)?;
+    if !known.iter().any(|name| name == remote) {
+        return Err(format!("远程 {remote} 不存在"));
+    }
+    let refspec = format!("{local}:{branch}");
+    let mut args = vec!["push".to_string(), "--progress".to_string()];
+    if set_upstream {
+        args.push("--set-upstream".to_string());
+    }
+    args.push(remote.to_string());
+    args.push(refspec);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    on_progress("正在连接远程，若弹出登录窗口请完成登录");
+    let output = run_git_streaming(&top, &refs, NETWORK_TIMEOUT, Some(NETWORK_STALL), on_progress)?;
+    let text = finish_network(&output, "推送")?;
+    let (ahead, behind) = ahead_behind(&top);
+    let fallback = if set_upstream { "已推送并设置上游" } else { "已推送" };
+    Ok(sync_outcome(
+        "ok",
+        command_summary_text(&text, fallback),
+        ahead,
+        behind,
+        remote,
+        branch,
+        Vec::new(),
+    ))
+}
+
 pub fn stash_save(repo: &str, message: &str) -> Result<String, String> {
     let top = validate_repo(repo)?;
     let msg = if message.trim().is_empty() { "EasyGit stash" } else { message.trim() };
@@ -4422,6 +4797,75 @@ mod tests {
 
         let again = push_repo(&local_s, false, &mut |_| {}).unwrap();
         assert_eq!(again.status, "up_to_date", "{}", again.message);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn preview_push_lists_commits_and_can_retarget() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("easy-git-push-preview-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("local");
+        let bare_s = bare.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+        git_ok(&root_s, &["init", "--bare", "-b", "main", &bare_s]);
+        init_repo(&local);
+        fs::write(local.join("a.txt"), "v1\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "init"]);
+        fs::write(local.join("b.txt"), "v2\n").unwrap();
+        git_ok(&local_s, &["add", "b.txt"]);
+        git_ok(&local_s, &["commit", "-m", "second"]);
+        git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
+
+        let preview = preview_push(&local_s, None, None).unwrap();
+        assert_eq!(preview.remote, "origin");
+        assert_eq!(preview.target_branch, "main");
+        assert!(!preview.target_exists);
+        assert!(preview.will_set_upstream);
+        assert_eq!(preview.ahead, 2);
+        assert_eq!(preview.commits.len(), 2);
+        assert_eq!(preview.commits[0].subject, "second");
+        assert!(preview.commits[0].files.iter().any(|file| file.path == "b.txt"));
+
+        let custom = preview_push(&local_s, Some("origin"), Some("feature")).unwrap();
+        assert_eq!(custom.target_branch, "feature");
+        assert!(!custom.target_exists);
+        assert!(custom.will_set_upstream);
+
+        let pushed = push_to(&local_s, "origin", "feature", true, &mut |_| {}).unwrap();
+        assert_eq!(pushed.status, "ok", "{}", pushed.message);
+        assert_eq!(upstream_ref(&local_s).as_deref(), Some("origin/feature"));
+        let (branch, _) = current_branch(&local_s).unwrap();
+        assert_eq!(branch, "main", "推送到别的远程分支不能改本地分支名");
+
+        let tracked = preview_push(&local_s, None, None).unwrap();
+        assert_eq!(tracked.remote, "origin");
+        assert_eq!(tracked.target_branch, "feature", "已有上游时默认推到上游，而不是强行同名");
+        assert!(tracked.target_exists);
+        assert_eq!(tracked.ahead, 0);
+        assert!(tracked.commits.is_empty());
+        assert!(!tracked.will_set_upstream);
+
+        let feature_ref = run_git(&local_s, &["rev-parse", "refs/remotes/origin/feature"], Duration::from_secs(8)).unwrap();
+        assert!(push_to(&local_s, "origin", "bad:name", false, &mut |_| {}).is_err());
+        assert!(push_to(&local_s, "elsewhere", "main", false, &mut |_| {}).is_err());
+        let feature_after = run_git(&local_s, &["rev-parse", "refs/remotes/origin/feature"], Duration::from_secs(8)).unwrap();
+        assert_eq!(lossy(&feature_ref.stdout), lossy(&feature_after.stdout));
+
+        fs::write(local.join("c.txt"), "v3\n").unwrap();
+        git_ok(&local_s, &["add", "c.txt"]);
+        git_ok(&local_s, &["commit", "-m", "third"]);
+        let again = preview_push(&local_s, Some("origin"), Some("feature")).unwrap();
+        assert_eq!(again.ahead, 1);
+        assert_eq!(again.commits.len(), 1);
+        assert!(again.commits[0].files.iter().any(|file| file.path == "c.txt"));
         let _ = fs::remove_dir_all(&root);
     }
 
