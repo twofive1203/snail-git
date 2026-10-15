@@ -85,6 +85,11 @@ interface CommitGraphProps {
   onCreateBranch?: (hash: string) => void;
   onCompareBranch?: (name: string) => void;
   currentBranch?: string;
+  listNote?: string;
+  listLoading?: boolean;
+  listError?: string;
+  hasMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 function compareTargets(commit: GitCommit, currentBranch: string): string[] {
@@ -252,6 +257,11 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   onCreateBranch,
   onCompareBranch,
   currentBranch = '',
+  listNote = '',
+  listLoading = false,
+  listError = '',
+  hasMore = false,
+  onLoadMore,
 }) => {
   const { t } = useI18n();
   const [contextMenu, setContextMenu] = useState<{
@@ -466,6 +476,23 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
           })}
         </tbody>
       </table>
+      {(listNote || listLoading || listError || hasMore) && (
+        <div className="px-3 py-2 flex items-center gap-3 text-[11px] text-jb-text-muted">
+          {listLoading && <span>{t('log.loading')}</span>}
+          {!listLoading && listError && <span className="text-rose-300">{listError}</span>}
+          {!listLoading && !listError && listNote && <span>{listNote}</span>}
+          {hasMore && onLoadMore && (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={listLoading}
+              className="px-2 py-0.5 rounded border border-[#393B40] text-[#DFE1E5] hover:bg-[#2B2D30] disabled:opacity-40"
+            >
+              {t('log.loadMore')}
+            </button>
+          )}
+        </div>
+      )}
       <GraphOverlay
         layout={layout}
         anchors={anchors}

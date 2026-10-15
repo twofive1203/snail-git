@@ -335,6 +335,8 @@ pub struct RepoSnapshot {
     pub user_name: String,
     pub changes: Vec<FileChangeDto>,
     pub commits: Vec<GitCommitDto>,
+    #[serde(default)]
+    pub commits_has_more: bool,
     pub branches: Vec<GitBranchDto>,
     pub tags: Vec<GitTagDto>,
     pub stashes: Vec<StashItemDto>,
@@ -969,126 +971,496 @@ fn current_branch(repo: &str) -> Result<(String, String), String> {
     Ok((branch, head))
 }
 
-pub fn git_log(repo: &str) -> Result<Vec<GitCommitDto>, String> {
+const LOG_PAGE_SIZE: usize = 200;
+const LOG_FETCH_CAP: usize = 20_000;
+const HISTORY_PRETTY: &str =
+    "COMMIT\x1f%H\x1f%h\x1f%P\x1f%an\x1f%ae\x1f%ad\x1f%ar\x1f%ct\x1f%D\x1f%s\x1f%b\x1e";
+
+#[derive(Debug, Clone)]
+pub struct CommitLogQuery {
+    pub branch: String,
+    pub author: String,
+    pub date: String,
+    pub path: String,
+    pub search: String,
+    pub skip: u32,
+    pub limit: usize,
+}
+
+impl Default for CommitLogQuery {
+    fn default() -> Self {
+        Self {
+            branch: "All".into(),
+            author: "All".into(),
+            date: "All".into(),
+            path: String::new(),
+            search: String::new(),
+            skip: 0,
+            limit: 0,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitLogPage {
+    pub commits: Vec<GitCommitDto>,
+    pub has_more: bool,
+}
+
+struct TimedCommit {
+    committer_time: i64,
+    commit: GitCommitDto,
+}
+
+struct HistoryRev {
+    args: Vec<String>,
+    ancestor: Option<String>,
+}
+
+/// 历史列表只取图谱需要的元数据。文件和增删行在点开提交时再读。
+/// limit 为 0 时使用默认页大小。搜索是说明、作者、哈希的并集，不是在已加载页里过滤。
+pub fn load_commit_log(repo: &str, query: &CommitLogQuery) -> Result<CommitLogPage, String> {
+    let top = validate_repo(repo)?;
+    let limit = if query.limit == 0 {
+        LOG_PAGE_SIZE
+    } else {
+        query.limit.min(LOG_PAGE_SIZE)
+    };
+    let skip = query.skip as usize;
+    if skip.saturating_add(limit) > LOG_FETCH_CAP {
+        return Err("已达到可继续加载的上限".into());
+    }
+    let search = query.search.trim();
+    if search.is_empty() {
+        load_history_page(&top, query, skip, limit)
+    } else {
+        load_search_page(&top, query, search, skip, limit)
+    }
+}
+
+pub fn load_commit_files(repo: &str, hash: &str) -> Result<Vec<CommitFileDto>, String> {
+    let top = validate_repo(repo)?;
+    validate_commit_hash(hash)?;
     let output = run_git(
-        repo,
+        &top,
         &[
             "log",
-            "--all",
-            "--date-order",
-            "-n",
-            "200",
+            "-1",
             "--name-status",
-            "--date=format:%Y-%m-%d %H:%M:%S",
-            "--pretty=format:COMMIT%x1f%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%ar%x1f%D%x1f%s%x1f%b%x1e",
+            "--find-renames",
+            "--pretty=format:",
+            hash,
         ],
-        Duration::from_secs(25),
+        Duration::from_secs(15),
     )?;
+    let text = ensure_ok(&output, "读取提交文件")?;
+    let mut files = parse_name_status(&text);
+    attach_commit_numstat(&top, hash, &mut files);
+    Ok(files)
+}
+
+fn load_history_page(
+    repo: &str,
+    query: &CommitLogQuery,
+    skip: usize,
+    limit: usize,
+) -> Result<CommitLogPage, String> {
+    let rev = history_rev(&query.branch)?;
+    let mut args = base_log_args(&rev.args);
+    push_exact_author(&mut args, &query.author)?;
+    push_since(&mut args, &query.date);
+    args.push("-n".into());
+    args.push((limit + 1).to_string());
+    if skip > 0 {
+        args.push("--skip".into());
+        args.push(skip.to_string());
+    }
+    push_path(&mut args, &query.path)?;
+    let mut commits = run_history(repo, &args)?
+        .into_iter()
+        .map(|item| item.commit)
+        .collect::<Vec<_>>();
+    let has_more = commits.len() > limit;
+    if has_more {
+        commits.truncate(limit);
+    }
+    Ok(finish_page(commits, has_more))
+}
+
+fn load_search_page(
+    repo: &str,
+    query: &CommitLogQuery,
+    search: &str,
+    skip: usize,
+    limit: usize,
+) -> Result<CommitLogPage, String> {
+    reject_control(search, "搜索条件")?;
+    let rev = history_rev(&query.branch)?;
+    let fetch = skip + limit + 1;
+    let mut arms = Vec::new();
+
+    let mut message = base_log_args(&rev.args);
+    message.push("-E".into());
+    message.push("-i".into());
+    message.push(format!("--grep={}", regex_literal(search)));
+    push_exact_author(&mut message, &query.author)?;
+    push_since(&mut message, &query.date);
+    message.push("-n".into());
+    message.push(fetch.to_string());
+    push_path(&mut message, &query.path)?;
+    arms.push(run_history(repo, &message)?);
+
+    if author_search_useful(&query.author, search) {
+        let mut author = base_log_args(&rev.args);
+        author.push("-E".into());
+        if blank_or_all(&query.author) {
+            author.push("-i".into());
+            author.push(format!("--author={}", regex_literal(search)));
+        } else {
+            push_exact_author(&mut author, &query.author)?;
+        }
+        push_since(&mut author, &query.date);
+        author.push("-n".into());
+        author.push(fetch.to_string());
+        push_path(&mut author, &query.path)?;
+        arms.push(run_history(repo, &author)?);
+    }
+
+    if let Ok(hashes) = disambiguated_commits(repo, search, rev.ancestor.as_deref()) {
+        if !hashes.is_empty() {
+            let mut hashed = base_log_args(&[]);
+            hashed.push("--no-walk".into());
+            hashed.push("-E".into());
+            push_exact_author(&mut hashed, &query.author)?;
+            push_since(&mut hashed, &query.date);
+            hashed.extend(hashes);
+            push_path(&mut hashed, &query.path)?;
+            if let Ok(found) = run_history(repo, &hashed) {
+                arms.push(found);
+            }
+        }
+    }
+
+    Ok(merge_arms(arms, skip, limit))
+}
+
+fn finish_page(mut commits: Vec<GitCommitDto>, has_more: bool) -> CommitLogPage {
+    assign_tracks(&mut commits);
+    CommitLogPage { commits, has_more }
+}
+
+fn merge_arms(arms: Vec<Vec<TimedCommit>>, skip: usize, limit: usize) -> CommitLogPage {
+    let mut all = Vec::new();
+    for arm in arms {
+        all.extend(arm);
+    }
+    all.sort_by(|left, right| {
+        right
+            .committer_time
+            .cmp(&left.committer_time)
+            .then_with(|| left.commit.hash.cmp(&right.commit.hash))
+    });
+    let mut seen = std::collections::HashSet::new();
+    let mut merged = Vec::new();
+    for item in all {
+        if seen.insert(item.commit.hash.clone()) {
+            merged.push(item.commit);
+        }
+    }
+    let has_more = merged.len() > skip + limit;
+    let commits = merged.into_iter().skip(skip).take(limit).collect();
+    finish_page(commits, has_more)
+}
+
+fn run_history(repo: &str, args: &[String]) -> Result<Vec<TimedCommit>, String> {
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = run_git(repo, &refs, Duration::from_secs(25))?;
     let text = ensure_ok(&output, "读取提交历史")?;
+    Ok(parse_history(&text))
+}
+
+fn base_log_args(revision: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "log".into(),
+        "--date-order".into(),
+        "--decorate=short".into(),
+        "--date=format:%Y-%m-%d %H:%M:%S".into(),
+        format!("--pretty=format:{HISTORY_PRETTY}"),
+    ];
+    args.extend(revision.iter().cloned());
+    args
+}
+
+fn history_rev(branch: &str) -> Result<HistoryRev, String> {
+    let branch = branch.trim();
+    if blank_or_all(branch) {
+        return Ok(HistoryRev {
+            args: vec!["--all".into()],
+            ancestor: None,
+        });
+    }
+    if branch == "Head" || branch == "HEAD" {
+        return Ok(HistoryRev {
+            args: vec!["HEAD".into()],
+            ancestor: Some("HEAD".into()),
+        });
+    }
+    validate_log_rev(branch)?;
+    Ok(HistoryRev {
+        args: vec![branch.to_string()],
+        ancestor: Some(branch.to_string()),
+    })
+}
+
+fn validate_log_rev(name: &str) -> Result<(), String> {
+    validate_rev(name)?;
+    if name.contains("..")
+        || name.contains(' ')
+        || name.contains(':')
+        || name.contains('^')
+        || name.contains('~')
+        || name.contains('\\')
+        || name.contains('?')
+        || name.contains('*')
+        || name.contains('[')
+        || name.contains('@')
+        || name.contains('\t')
+    {
+        return Err(format!("无效的修订版本：{name}"));
+    }
+    Ok(())
+}
+
+fn push_exact_author(args: &mut Vec<String>, author: &str) -> Result<(), String> {
+    if blank_or_all(author) {
+        return Ok(());
+    }
+    let author = author.trim();
+    reject_control(author, "作者")?;
+    args.push("-E".into());
+    // --author 匹配的是 "Name <email>"，不能用 ^Name$ 否则精确筛选永远落空。
+    args.push(format!("--author=^{} <", regex_literal(author)));
+    Ok(())
+}
+
+fn push_since(args: &mut Vec<String>, date: &str) {
+    let since = match date.trim() {
+        "Today" => "midnight",
+        "Last 7 Days" => "7 days ago",
+        "Last 30 Days" => "30 days ago",
+        _ => return,
+    };
+    args.push(format!("--since={since}"));
+}
+
+fn push_path(args: &mut Vec<String>, path: &str) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok(());
+    }
+    reject_control(path, "路径")?;
+    args.push("--".into());
+    args.push(path.to_string());
+    Ok(())
+}
+
+fn blank_or_all(value: &str) -> bool {
+    let value = value.trim();
+    value.is_empty() || value == "All"
+}
+
+fn author_search_useful(author: &str, search: &str) -> bool {
+    if blank_or_all(author) {
+        return true;
+    }
+    author.to_lowercase().contains(&search.to_lowercase())
+}
+
+fn reject_control(value: &str, label: &str) -> Result<(), String> {
+    if value.chars().any(|ch| ch == '\n' || ch == '\r' || ch == '\0') {
+        return Err(format!("无效的{label}"));
+    }
+    Ok(())
+}
+
+fn regex_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if matches!(
+            ch,
+            '\\' | '.' | '*' | '+' | '?' | '|' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$'
+        ) {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn is_hex_prefix(text: &str) -> bool {
+    (4..=40).contains(&text.len()) && text.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn validate_commit_hash(hash: &str) -> Result<(), String> {
+    if is_hex_prefix(hash) && hash.len() >= 7 {
+        Ok(())
+    } else {
+        Err("无效的提交哈希".into())
+    }
+}
+
+fn disambiguated_commits(
+    repo: &str,
+    prefix: &str,
+    ancestor: Option<&str>,
+) -> Result<Vec<String>, String> {
+    if !is_hex_prefix(prefix) {
+        return Ok(Vec::new());
+    }
+    let output = match run_git(
+        repo,
+        &["rev-parse", &format!("--disambiguate={prefix}")],
+        Duration::from_secs(12),
+    ) {
+        Ok(output) if output.status.success() => output,
+        _ => return Ok(Vec::new()),
+    };
+    let mut hashes = Vec::new();
+    for line in lossy(&output.stdout).lines().take(40) {
+        let obj = line.trim();
+        if obj.is_empty() || !obj.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            continue;
+        }
+        let spec = format!("{obj}^{{commit}}");
+        let verified = match run_git(
+            repo,
+            &["rev-parse", "--verify", "--quiet", &spec],
+            Duration::from_secs(8),
+        ) {
+            Ok(output) if output.status.success() => lossy(&output.stdout),
+            _ => continue,
+        };
+        if verified.is_empty() {
+            continue;
+        }
+        if let Some(rev) = ancestor {
+            let is_ancestor = run_git(
+                repo,
+                &["merge-base", "--is-ancestor", &verified, rev],
+                Duration::from_secs(8),
+            )
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+            if !is_ancestor {
+                continue;
+            }
+        }
+        hashes.push(verified);
+    }
+    Ok(hashes)
+}
+
+fn parse_history(text: &str) -> Vec<TimedCommit> {
     let mut commits = Vec::new();
     for block in text.split("COMMIT\x1f") {
         if block.trim().is_empty() {
             continue;
         }
-        let (meta, rest) = block.split_once('\x1e').unwrap_or((block, ""));
+        let (meta, _) = block.split_once('\x1e').unwrap_or((block, ""));
         let fields: Vec<&str> = meta.split('\x1f').collect();
-        if fields.len() < 9 {
+        if fields.len() < 10 {
             continue;
         }
         let parents = fields[2]
             .split_whitespace()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
             .collect();
-        let refs = fields[7]
+        let refs = fields[8]
             .split(", ")
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
             .collect();
-        let body = if fields.len() > 9 {
-            let b = fields[9..].join("\x1f").trim().to_string();
-            if b.is_empty() { None } else { Some(b) }
+        let body = if fields.len() > 10 {
+            let text = fields[10..].join("\x1f").trim().to_string();
+            if text.is_empty() { None } else { Some(text) }
         } else {
             None
         };
-        let mut files = Vec::new();
-        for line in rest.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let mut cols = line.split('\t');
-            let code = cols.next().unwrap_or("");
-            let path = cols.next().unwrap_or("").to_string();
-            if path.is_empty() {
-                continue;
-            }
-            let new_path = cols.next().unwrap_or("").to_string();
-            let display = if new_path.is_empty() { path } else { new_path };
-            let status = match code.chars().next().unwrap_or('M') {
-                'A' => "added",
-                'D' => "deleted",
-                'U' => "conflict",
-                _ => "modified",
-            };
-            files.push(CommitFileDto {
-                filename: filename_of(&display),
-                path: display,
-                status: status.into(),
-                additions: 0,
-                deletions: 0,
-            });
-        }
-        commits.push(GitCommitDto {
-            hash: fields[0].to_string(),
-            short_hash: fields[1].to_string(),
-            subject: fields[8].to_string(),
-            body,
-            author: fields[3].to_string(),
-            author_email: fields[4].to_string(),
-            date: fields[5].to_string(),
-            relative_date: fields[6].to_string(),
-            parents,
-            refs,
-            branch_track: 0,
-            files,
+        commits.push(TimedCommit {
+            committer_time: fields[7].parse::<i64>().unwrap_or(0),
+            commit: GitCommitDto {
+                hash: fields[0].to_string(),
+                short_hash: fields[1].to_string(),
+                subject: fields[9].to_string(),
+                body,
+                author: fields[3].to_string(),
+                author_email: fields[4].to_string(),
+                date: fields[5].to_string(),
+                relative_date: fields[6].to_string(),
+                parents,
+                refs,
+                branch_track: 0,
+                files: Vec::new(),
+            },
         });
     }
-    assign_tracks(&mut commits);
-    attach_numstat(repo, &mut commits);
-    Ok(commits)
+    commits
 }
 
-fn attach_numstat(repo: &str, commits: &mut [GitCommitDto]) {
-    let output = match run_git(
-        repo,
-        &[
-            "log",
-            "--all",
-            "--date-order",
-            "-n",
-            "200",
-            "--numstat",
-            "--pretty=format:%H",
-        ],
-        Duration::from_secs(25),
-    ) {
-        Ok(output) if output.status.success() => lossy(&output.stdout),
-        _ => return,
-    };
-    let mut current = String::new();
-    let mut stats: std::collections::HashMap<String, Vec<(i32, i32, String)>> = std::collections::HashMap::new();
-    for line in output.lines() {
+fn parse_name_status(text: &str) -> Vec<CommitFileDto> {
+    let mut files = Vec::new();
+    for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if !line.contains('\t') && line.chars().all(|c| c.is_ascii_hexdigit()) && line.len() >= 7 {
-            current = line.to_string();
+        let mut cols = line.split('\t');
+        let code = cols.next().unwrap_or("");
+        if !code.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic()) {
             continue;
         }
-        if current.is_empty() {
+        let path = cols.next().unwrap_or("").to_string();
+        if path.is_empty() {
+            continue;
+        }
+        let new_path = cols.next().unwrap_or("").to_string();
+        let display = if new_path.is_empty() { path } else { new_path };
+        let status = match code.chars().next().unwrap_or('M') {
+            'A' => "added",
+            'D' => "deleted",
+            'U' => "conflict",
+            _ => "modified",
+        };
+        files.push(CommitFileDto {
+            filename: filename_of(&display),
+            path: display.replace('\\', "/"),
+            status: status.into(),
+            additions: 0,
+            deletions: 0,
+        });
+    }
+    files
+}
+
+fn attach_commit_numstat(repo: &str, hash: &str, files: &mut [CommitFileDto]) {
+    if files.is_empty() {
+        return;
+    }
+    let output = match run_git(
+        repo,
+        &["log", "-1", "--numstat", "--pretty=format:%H", hash],
+        Duration::from_secs(15),
+    ) {
+        Ok(output) if output.status.success() => lossy(&output.stdout),
+        _ => return,
+    };
+    let mut rows = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() || !line.contains('\t') {
             continue;
         }
         let mut cols = line.split('\t');
@@ -1098,18 +1470,13 @@ fn attach_numstat(repo: &str, commits: &mut [GitCommitDto]) {
         if path.is_empty() {
             continue;
         }
-        stats.entry(current.clone()).or_default().push((additions, deletions, path));
+        rows.push((additions, deletions, path));
     }
-    for commit in commits.iter_mut() {
-        let Some(rows) = stats.get(&commit.hash) else {
-            continue;
-        };
-        for file in &mut commit.files {
-            let wanted = file.path.replace('\\', "/");
-            if let Some((additions, deletions, _)) = rows.iter().find(|(_, _, path)| numstat_matches(&wanted, path)) {
-                file.additions = *additions;
-                file.deletions = *deletions;
-            }
+    for file in files.iter_mut() {
+        let wanted = file.path.replace('\\', "/");
+        if let Some((additions, deletions, _)) = rows.iter().find(|(_, _, path)| numstat_matches(&wanted, path)) {
+            file.additions = *additions;
+            file.deletions = *deletions;
         }
     }
 }
@@ -1316,9 +1683,14 @@ pub fn load_snapshot(repo: &str) -> Result<RepoSnapshot, String> {
         .and_then(|o| ensure_ok(&o, "git version").ok())
         .unwrap_or_else(|| "git".into());
     let user_name = configured_user_name(&top);
+    let log_page = load_commit_log(&top, &CommitLogQuery::default()).unwrap_or(CommitLogPage {
+        commits: Vec::new(),
+        has_more: false,
+    });
     Ok(RepoSnapshot {
         dirty_files_count: changes.len() as u32,
-        commits: git_log(&top).unwrap_or_default(),
+        commits: log_page.commits,
+        commits_has_more: log_page.has_more,
         branches: list_branches(&top, &branch).unwrap_or_default(),
         tags: list_tags(&top).unwrap_or_default(),
         stashes: list_stashes(&top).unwrap_or_default(),
@@ -4508,11 +4880,13 @@ mod tests {
         assert!(staged[0].is_staged, "file should be staged");
 
         commit(&path, "init", false, false).unwrap();
-        let log = git_log(&path).unwrap();
+        let log = load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits;
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].subject, "init");
         assert!(log[0].refs.iter().any(|r| r.contains("main")));
-        assert!(log[0].files.iter().any(|f| f.additions > 0), "commit file stats should come from numstat");
+        assert!(log[0].files.is_empty(), "history list should not preload file stats");
+        let files = load_commit_files(&path, &log[0].hash).unwrap();
+        assert!(files.iter().any(|f| f.path == "a.txt" && f.additions > 0), "commit file stats should come from numstat");
         let tagged = run_git(&path, &["tag", "v0.1.0"], Duration::from_secs(8)).unwrap();
         assert!(tagged.status.success(), "{}", lossy(&tagged.stderr));
         let tags = list_tags(&path).unwrap();
@@ -4596,6 +4970,112 @@ mod tests {
         assert!(old_spans.iter().any(|span| span.kind == "del" && span.text.contains("world")));
         assert!(new_spans.iter().any(|span| span.kind == "add" && span.text.contains("EasyGit")));
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commit_log_query_pages_and_filters() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let dir = std::env::temp_dir().join(format!("easy-git-log-{}-{stamp}", std::process::id()));
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        let init = run_git(&path, &["init", "-b", "main"], Duration::from_secs(10)).unwrap();
+        assert!(init.status.success(), "{}", lossy(&init.stderr));
+        let _ = run_git(&path, &["config", "user.email", "test@easygit.local"], Duration::from_secs(5));
+        let _ = run_git(&path, &["config", "user.name", "EasyGit Test"], Duration::from_secs(5));
+
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/old.txt"), "old\n").unwrap();
+        stage_paths(&path, &["src/old.txt".into()]).unwrap();
+        let other = run_git(
+            &path,
+            &["commit", "--author", "Other Person <other@easygit.local>", "-m", "alpha unique"],
+            Duration::from_secs(15),
+        )
+        .unwrap();
+        assert!(other.status.success(), "{}", lossy(&other.stderr));
+        run_git(&path, &["branch", "feature"], Duration::from_secs(8)).unwrap();
+
+        fs::write(dir.join("b.txt"), "b\n").unwrap();
+        stage_paths(&path, &["b.txt".into()]).unwrap();
+        commit(&path, "beta", false, false).unwrap();
+        fs::write(dir.join("c.txt"), "c\n").unwrap();
+        stage_paths(&path, &["c.txt".into()]).unwrap();
+        commit(&path, "gamma", false, false).unwrap();
+
+        let page = load_commit_log(&path, &CommitLogQuery { limit: 2, ..CommitLogQuery::default() }).unwrap();
+        assert_eq!(page.commits.len(), 2);
+        assert!(page.has_more);
+        assert_eq!(page.commits[0].subject, "gamma");
+        assert!(page.commits[0].files.is_empty());
+
+        let older = load_commit_log(&path, &CommitLogQuery { skip: 2, limit: 2, ..CommitLogQuery::default() }).unwrap();
+        assert_eq!(older.commits.len(), 1);
+        assert!(!older.has_more);
+        assert_eq!(older.commits[0].subject, "alpha unique");
+
+        let by_message = load_commit_log(
+            &path,
+            &CommitLogQuery { search: "alpha unique".into(), limit: 2, ..CommitLogQuery::default() },
+        )
+        .unwrap();
+        assert_eq!(by_message.commits.len(), 1);
+        assert_eq!(by_message.commits[0].subject, "alpha unique");
+
+        let by_author_text = load_commit_log(
+            &path,
+            &CommitLogQuery { search: "Other Person".into(), limit: 2, ..CommitLogQuery::default() },
+        )
+        .unwrap();
+        assert!(by_author_text.commits.iter().any(|item| item.subject == "alpha unique"));
+
+        let by_author = load_commit_log(
+            &path,
+            &CommitLogQuery { author: "Other Person".into(), limit: 2, ..CommitLogQuery::default() },
+        )
+        .unwrap();
+        assert_eq!(by_author.commits.len(), 1);
+        assert_eq!(by_author.commits[0].subject, "alpha unique");
+
+        let by_path = load_commit_log(
+            &path,
+            &CommitLogQuery { path: "src".into(), limit: 2, ..CommitLogQuery::default() },
+        )
+        .unwrap();
+        assert_eq!(by_path.commits.len(), 1);
+        assert_eq!(by_path.commits[0].subject, "alpha unique");
+
+        let by_branch = load_commit_log(
+            &path,
+            &CommitLogQuery { branch: "feature".into(), limit: 2, ..CommitLogQuery::default() },
+        )
+        .unwrap();
+        assert_eq!(by_branch.commits.len(), 1);
+        assert_eq!(by_branch.commits[0].subject, "alpha unique");
+
+        let head = load_commit_log(
+            &path,
+            &CommitLogQuery { branch: "Head".into(), limit: 10, ..CommitLogQuery::default() },
+        )
+        .unwrap();
+        assert_eq!(head.commits.len(), 3);
+
+        let prefix = &older.commits[0].hash[..7];
+        let by_hash = load_commit_log(
+            &path,
+            &CommitLogQuery { search: prefix.into(), limit: 2, ..CommitLogQuery::default() },
+        )
+        .unwrap();
+        assert!(by_hash.commits.iter().any(|item| item.hash.starts_with(prefix)));
+
+        let files = load_commit_files(&path, &older.commits[0].hash).unwrap();
+        assert!(files.iter().any(|file| file.path == "src/old.txt" && file.additions > 0));
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -48,6 +48,21 @@ async function syncWindowTitle(title: string) {
   }
 }
 
+async function syncTrayLocale(locale: Locale) {
+  try {
+    const { isTauriEnvironment } = await import('../services/gitService');
+    if (!isTauriEnvironment()) return;
+    const { invoke } = await import('@tauri-apps/api/core');
+    const table = locale === 'en' ? en : zh;
+    await invoke('set_tray_locale', {
+      show: table['tray.show'],
+      quit: table['tray.quit'],
+    });
+  } catch {
+    // 托盘还没建好或浏览器预览时忽略，不影响语言切换。
+  }
+}
+
 export function getLocale(): Locale {
   return current;
 }
@@ -62,6 +77,7 @@ export function setLocale(next: Locale) {
   }
   applyDocumentLocale(next);
   void syncWindowTitle(TITLES[next]);
+  void syncTrayLocale(next);
   listeners.forEach(listener => listener(next));
 }
 
@@ -84,3 +100,4 @@ export function t(key: MessageKey, vars?: Record<string, string | number>): stri
 
 applyDocumentLocale(current);
 void syncWindowTitle(TITLES[current]);
+void syncTrayLocale(current);

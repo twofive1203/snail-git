@@ -22,6 +22,8 @@ export interface RepoSnapshot {
   userName: string;
   changes: FileChange[];
   commits: GitCommit[];
+  /** 旧后端未返回时视为没有下一页。 */
+  commitsHasMore?: boolean;
   branches: GitBranch[];
   /** 旧后端未返回时由调用方补空数组。 */
   tags?: GitTag[];
@@ -58,6 +60,37 @@ export async function toggleFavoriteRepo(id: string): Promise<GitRepository[]> {
 
 export async function loadRepoSnapshot(repoPath: string): Promise<RepoSnapshot> {
   return invokeTauri<RepoSnapshot>('load_repo_snapshot', { repoPath });
+}
+
+export interface CommitLogPage {
+  commits: GitCommit[];
+  hasMore: boolean;
+}
+
+export interface CommitLogRequest {
+  branch?: string;
+  author?: string;
+  date?: string;
+  path?: string;
+  search?: string;
+  skip?: number;
+}
+
+/** 按筛选条件重新查询提交。不传筛选时返回默认历史页，skip 用于继续加载。 */
+export async function loadCommitLog(repoPath: string, query: CommitLogRequest = {}): Promise<CommitLogPage> {
+  return invokeTauri<CommitLogPage>('load_commit_log', {
+    repoPath,
+    branch: query.branch,
+    author: query.author,
+    date: query.date,
+    path: query.path,
+    search: query.search,
+    skip: query.skip,
+  });
+}
+
+export async function loadCommitFiles(repoPath: string, hash: string): Promise<GitCommit['files']> {
+  return invokeTauri<GitCommit['files']>('load_commit_files', { repoPath, hash });
 }
 
 export async function repoSignature(repoPath: string): Promise<string> {

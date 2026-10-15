@@ -14,6 +14,8 @@ import { useI18n } from '../../i18n/react';
 
 interface CommitDetailProps {
   commit: GitCommit | null;
+  filesLoading?: boolean;
+  filesError?: string;
   onOpenFileDiff: (filePath: string) => void;
   onSelectParent?: (hash: string) => void;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -61,6 +63,8 @@ function FileTree({ files, onOpen }: { files: GitCommit['files']; onOpen: (path:
 
 export const CommitDetail: React.FC<CommitDetailProps> = ({
   commit,
+  filesLoading = false,
+  filesError = '',
   onOpenFileDiff,
   onSelectParent,
   onCollapsedChange,
@@ -130,7 +134,9 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
         <div className="flex items-center space-x-2 truncate">
           <span className="font-mono text-blue-400 font-medium">{commit.shortHash}</span>
           <span className="text-[#DFE1E5] truncate font-medium">{commit.subject}</span>
-          <span className="text-[#8C9099] text-[11px]">{t('detail.files', { count: commit.files.length })}</span>
+          <span className="text-[#8C9099] text-[11px]">
+            {filesLoading ? t('detail.filesLoading') : t('detail.files', { count: commit.files.length })}
+          </span>
         </div>
         <button
           onClick={() => setIsCollapsed(false)}
@@ -234,6 +240,12 @@ export const CommitDetail: React.FC<CommitDetailProps> = ({
           </div>
 
           <div className="flex-1 overflow-y-auto p-1 space-y-0.5">
+            {filesLoading && commit.files.length === 0 && (
+              <div className="px-2 py-3 text-[11px] text-jb-text-muted">{t('detail.filesLoading')}</div>
+            )}
+            {filesError && (
+              <div className="px-2 py-3 text-[11px] text-rose-300">{filesError}</div>
+            )}
             {isTreeView ? (
               <FileTree files={commit.files} onOpen={onOpenFileDiff} />
             ) : commit.files.map((file) => (

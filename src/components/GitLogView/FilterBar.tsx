@@ -48,9 +48,9 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   };
 
   return (
-    <div className="h-8 bg-[#1E1F22] border-b border-[#303236] flex items-center justify-between px-2.5 text-xs gap-2 select-none shrink-0">
-      {/* 左侧各维度筛选胶囊 */}
-      <div className="flex items-center space-x-1.5 flex-1 overflow-x-auto no-scrollbar">
+    <div className="h-8 min-w-0 bg-[#1E1F22] border-b border-[#303236] flex items-center justify-between px-2.5 text-xs gap-2 select-none shrink-0">
+      {/* 左侧各维度筛选胶囊：不收缩，窄宽度横向滚动，避免中文按字折成竖排 */}
+      <div className="flex items-center space-x-1.5 flex-1 min-w-0 overflow-x-auto no-scrollbar">
         <button
           type="button"
           disabled={!currentUser}
@@ -81,17 +81,20 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         </button>
 
         {/* 分支筛选胶囊 */}
-        <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+        <div
+          title={t('filter.branch')}
+          className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 whitespace-nowrap transition-colors ${
           selectedBranch !== 'All' 
             ? 'bg-[#3574F0]/20 border-[#3574F0] text-blue-300' 
             : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
         }`}>
           <GitBranch className="w-3 h-3 text-[#3574F0] shrink-0" />
-          <span className="text-[#8C9099]">{t('filter.branch')}</span>
           <select 
             value={selectedBranch}
             onChange={(e) => onBranchChange(e.target.value)}
-            className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
+            aria-label={t('filter.branch')}
+            title={t('filter.branch')}
+            className="bg-transparent border-none text-[11px] whitespace-nowrap focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
             <option value="All" className="bg-[#2B2D30]">{t('filter.allBranches')}</option>
             <option value="Head" className="bg-[#2B2D30]">{t('filter.headOption')}</option>
@@ -105,17 +108,20 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         </div>
 
         {/* 作者筛选胶囊 */}
-        <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+        <div
+          title={t('filter.user')}
+          className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 whitespace-nowrap transition-colors ${
           selectedAuthor !== 'All' 
             ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300' 
             : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
         }`}>
           <User className="w-3 h-3 text-emerald-400 shrink-0" />
-          <span className="text-[#8C9099]">{t('filter.user')}</span>
           <select 
             value={selectedAuthor}
             onChange={(e) => onAuthorChange(e.target.value)}
-            className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
+            aria-label={t('filter.user')}
+            title={t('filter.user')}
+            className="bg-transparent border-none text-[11px] whitespace-nowrap focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
             <option value="All" className="bg-[#2B2D30]">{t('filter.allUsers')}</option>
             {authorOptions.map(a => (
@@ -125,17 +131,20 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         </div>
 
         {/* 日期筛选胶囊 */}
-        <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+        <div
+          title={t('filter.date')}
+          className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 whitespace-nowrap transition-colors ${
           selectedDate !== 'All' 
             ? 'bg-purple-500/20 border-purple-500 text-purple-300' 
             : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
         }`}>
           <Calendar className="w-3 h-3 text-purple-400 shrink-0" />
-          <span className="text-[#8C9099]">{t('filter.date')}</span>
           <select
             value={selectedDate}
             onChange={(e) => onDateChange(e.target.value)}
-            className="bg-transparent border-none text-[11px] focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
+            aria-label={t('filter.date')}
+            title={t('filter.date')}
+            className="bg-transparent border-none text-[11px] whitespace-nowrap focus:outline-none cursor-pointer text-[#DFE1E5] font-medium"
           >
             <option value="All" className="bg-[#2B2D30]">{t('filter.all')}</option>
             <option value="Today" className="bg-[#2B2D30]">{t('filter.today')}</option>
@@ -145,18 +154,21 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         </div>
 
         {/* 路径筛选胶囊 */}
-        <div className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+        <div
+          title={t('filter.pathsHint')}
+          className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 whitespace-nowrap transition-colors ${
           pathQuery.trim() !== '' 
             ? 'bg-amber-500/20 border-amber-500 text-amber-300' 
             : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
         }`}>
           <FolderTree className="w-3 h-3 text-amber-400 shrink-0" />
-          <span className="text-[#8C9099]">{t('filter.paths')}</span>
           <input
             value={pathQuery}
             onChange={(e) => onPathChange(e.target.value)}
             placeholder={t('filter.all')}
-            className="w-20 bg-transparent border-none text-[11px] focus:outline-none text-[#DFE1E5] placeholder-[#6F737A]"
+            aria-label={t('filter.paths')}
+            title={t('filter.pathsHint')}
+            className="w-20 shrink-0 whitespace-nowrap bg-transparent border-none text-[11px] focus:outline-none text-[#DFE1E5] placeholder-[#6F737A]"
           />
         </div>
 
@@ -164,7 +176,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         {isFiltered && (
           <button
             onClick={handleResetFilters}
-            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#2B2D30] transition-colors"
+            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#2B2D30] transition-colors shrink-0 whitespace-nowrap"
             title={t('filter.resetTitle')}
           >
             <RotateCcw className="w-2.5 h-2.5" />
@@ -174,7 +186,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
       </div>
 
       {/* 右侧关键词搜索框 */}
-      <div className="relative w-64 shrink-0">
+      <div className="relative w-64 min-w-[9rem] max-w-64 shrink">
         <Search className="w-3 h-3 text-[#6F737A] absolute left-2 top-1/2 -translate-y-1/2" />
         <input 
           type="text"

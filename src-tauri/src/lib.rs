@@ -2,9 +2,12 @@ mod git_ops;
 
 use git_ops::RepoSnapshot;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 static WATCH_PATH: Mutex<String> = Mutex::new(String::new());
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
@@ -108,6 +111,35 @@ fn toggle_favorite_repo(id: String) -> Result<Vec<git_ops::SavedRepoDto>, String
 #[tauri::command]
 fn load_repo_snapshot(repo_path: String) -> Result<RepoSnapshot, String> {
     git_ops::load_snapshot(&repo_path)
+}
+
+#[tauri::command]
+fn load_commit_log(
+    repo_path: String,
+    branch: Option<String>,
+    author: Option<String>,
+    date: Option<String>,
+    path: Option<String>,
+    search: Option<String>,
+    skip: Option<u32>,
+) -> Result<git_ops::CommitLogPage, String> {
+    git_ops::load_commit_log(
+        &repo_path,
+        &git_ops::CommitLogQuery {
+            branch: branch.unwrap_or_else(|| "All".into()),
+            author: author.unwrap_or_else(|| "All".into()),
+            date: date.unwrap_or_else(|| "All".into()),
+            path: path.unwrap_or_default(),
+            search: search.unwrap_or_default(),
+            skip: skip.unwrap_or(0),
+            limit: 0,
+        },
+    )
+}
+
+#[tauri::command]
+fn load_commit_files(repo_path: String, hash: String) -> Result<Vec<git_ops::CommitFileDto>, String> {
+    git_ops::load_commit_files(&repo_path, &hash)
 }
 
 #[tauri::command]
@@ -471,6 +503,97 @@ fn data_dir_candidates() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
+static TRAY_READY: AtomicBool = AtomicBool::new(false);
+const TRAY_ID: &str = "main";
+
+fn request_exit(app: &AppHandle) {
+    ALLOW_EXIT.store(true, Ordering::SeqCst);
+    // 先摘掉图标，避免进程退出后右下角还留着空图标。
+    app.remove_tray_by_id(TRAY_ID);
+    app.exit(0);
+}
+
+fn reveal_main_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    // 窗口藏在托盘里，或第二个实例刚被拦下来时，Windows 经常拒绝 set_focus。
+    // 短暂置顶能把已有窗口拉到前台，随后取消，避免一直盖住其他窗口。
+    let _ = window.set_always_on_top(true);
+    let later = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(120));
+        let _ = later.set_always_on_top(false);
+    });
+}
+
+fn tray_menu(app: &AppHandle, show: &str, quit: &str) -> tauri::Result<Menu<tauri::Wry>> {
+    let show_item = MenuItem::with_id(app, "tray-show", show, true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "tray-quit", quit, true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    Menu::with_items(app, &[&show_item, &separator, &quit_item])
+}
+
+fn tray_icon(app: &tauri::App) -> Option<tauri::image::Image<'static>> {
+    if let Some(icon) = app.default_window_icon() {
+        return Some(icon.clone().to_owned());
+    }
+    tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok()
+}
+
+fn install_tray(app: &tauri::App) -> tauri::Result<()> {
+    let Some(icon) = tray_icon(app) else {
+        return Err(tauri::Error::Io(std::io::Error::other("没有可用的托盘图标")));
+    };
+    let handle = app.handle();
+    let menu = tray_menu(handle, "显示 EasyGit", "退出")?;
+    TrayIconBuilder::with_id(TRAY_ID)
+        .tooltip("EasyGit")
+        .icon(icon)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "tray-show" => reveal_main_window(app),
+            "tray-quit" => request_exit(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            let restore = matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            );
+            if restore {
+                reveal_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    TRAY_READY.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_tray_locale(app: AppHandle, show: String, quit: String) -> Result<(), String> {
+    if !TRAY_READY.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let menu = tray_menu(&app, &show, &quit).map_err(|err| err.to_string())?;
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return Ok(());
+    };
+    tray.set_menu(Some(menu)).map_err(|err| err.to_string())
+}
+
 fn open_main_window(app: &tauri::App) -> Result<(), tauri::Error> {
     let mut last_prepare_error = String::from("没有可写的 WebView2 数据目录");
     for dir in data_dir_candidates() {
@@ -507,12 +630,28 @@ pub fn run() {
     std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            reveal_main_window(app);
+        }))
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = APP_HANDLE.set(handle.clone());
             std::thread::spawn(move || watch_loop(handle));
+            if let Err(err) = install_tray(app) {
+                eprintln!("[SETUP_DEBUG] tray icon unavailable: {err}");
+            }
             open_main_window(app)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if ALLOW_EXIT.load(Ordering::SeqCst) || !TRAY_READY.load(Ordering::SeqCst) {
+                    return;
+                }
+                // 点 X 只收进右下角托盘，进程继续跑。真正退出走托盘菜单。
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_system_git_version,
@@ -523,6 +662,8 @@ pub fn run() {
             remove_saved_repo,
             toggle_favorite_repo,
             load_repo_snapshot,
+            load_commit_log,
+            load_commit_files,
             repo_signature,
             set_watch_path,
             load_file_diff,
@@ -574,7 +715,8 @@ pub fn run() {
             smart_merge_conflict,
             inspect_file,
             process_memory_mb,
-            reveal_path
+            reveal_path,
+            set_tray_locale
         ])
         .run(tauri::generate_context!())
         .expect("error while running easy-git tauri application");

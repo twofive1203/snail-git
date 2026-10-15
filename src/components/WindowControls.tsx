@@ -35,7 +35,7 @@ async function runWindow(action: 'minimize' | 'toggleMaximize' | 'close') {
   const win = getCurrentWindow();
   if (action === 'minimize') await win.minimize();
   else if (action === 'toggleMaximize') await win.toggleMaximize();
-  else await win.close();
+  else await win.close(); // Rust 拦截后收进托盘，不退出进程。
 }
 
 function RestoreIcon() {

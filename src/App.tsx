@@ -120,6 +120,7 @@ export function App() {
   const [branches, setBranches] = useState(native ? [] : mockBranches);
   const [tags, setTags] = useState<GitTag[]>(native ? [] : mockTags);
   const [commits, setCommits] = useState(native ? [] : mockCommits);
+  const [commitsHasMore, setCommitsHasMore] = useState(false);
   const [changes, setChanges] = useState<FileChange[]>(native ? [] : mockCurrentChanges);
   const [shelves, setShelves] = useState(native ? [] : mockShelves);
   const [stashes, setStashes] = useState(native ? [] : mockStashes);
@@ -169,6 +170,7 @@ export function App() {
     setCurrentUser(snap.userName || '');
     setChanges(snap.changes);
     setCommits(snap.commits);
+    setCommitsHasMore(Boolean(snap.commitsHasMore));
     setBranches(snap.branches);
     setTags(snap.tags ?? []);
     setStashes(snap.stashes);
@@ -822,7 +824,9 @@ export function App() {
 
           {activeRepo && activeTab === 'log' && (
             <GitLogView
+              repoPath={activeRepo.path}
               commits={commits}
+              commitsHasMore={commitsHasMore}
               onOpenFileDiff={(commit, path) => {
                 void openRevision(`${commit.shortHash} ${path}`, commit.hash, 'commit', path);
               }}
