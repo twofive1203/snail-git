@@ -1,4 +1,4 @@
-import { GitCommit, GitBranch, FileChange, ShelfItem, StashItem, FileChangeStatus, DiffChunk, DiffLine, GitRepository } from '../types/git';
+import { GitCommit, GitBranch, GitTag, FileChange, ShelfItem, StashItem, FileChangeStatus, DiffChunk, DiffLine, GitRepository } from '../types/git';
 
 export const mockRepositories: GitRepository[] = [
   {
@@ -119,7 +119,22 @@ export const mockBranches: GitBranch[] = [
     lastCommitHash: 'b12c98e',
     lastCommitMessage: 'feat(auth): 初始提交 OAuth2 与 Token 逻辑结构',
     isFavorite: false,
+  },
+  {
+    name: 'upstream/develop',
+    isCurrent: false,
+    isRemote: true,
+    lastCommitHash: 'f49c01e',
+    lastCommitMessage: 'refactor(diff): 优化双栏 Diff Token 级比对计算',
+    isFavorite: false,
   }
+];
+
+export const mockTags: GitTag[] = [
+  { name: 'v1.3.0-rc1', hash: 'a71b2d3', subject: 'feat(core): 实现高性能 Git 拓扑图谱 SVG 渲染算法' },
+  { name: 'v1.2.0', hash: '9a21b33', subject: 'perf: 替换原生 libgit2 索引读取，内存占用减少 65%' },
+  { name: 'v1.0.0', hash: '2c78a01', subject: 'Initial commit: 创建 easy-git 基础架构与工程脚手架' },
+  { name: '6.7-ai分支备份', hash: '5e87a91', subject: 'fix(ipc): 修复 Windows 平台下管道通信长输出挂起问题' },
 ];
 
 export const mockCommits: GitCommit[] = [

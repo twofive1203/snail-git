@@ -95,6 +95,9 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           >
             <option value="All" className="bg-[#2B2D30]">{t('filter.allBranches')}</option>
             <option value="Head" className="bg-[#2B2D30]">{t('filter.headOption')}</option>
+            {selectedBranch !== 'All' && selectedBranch !== 'Head' && !branches.includes(selectedBranch) && (
+              <option value={selectedBranch} className="bg-[#2B2D30]">{selectedBranch}</option>
+            )}
             {branches.map(b => (
               <option key={b} value={b} className="bg-[#2B2D30]">{b}</option>
             ))}

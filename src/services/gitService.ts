@@ -1,4 +1,4 @@
-import { ConflictView, DiffChunk, FileChange, FileMeta, GitBranch, GitCommit, GitRemote, GitRepository, PatchFile, RemoteList, RevisionFile, ShelfItem, StashItem } from '../types/git';
+import { ConflictView, DiffChunk, FileChange, FileMeta, GitBranch, GitCommit, GitRemote, GitRepository, GitTag, PatchFile, RemoteList, RevisionFile, ShelfItem, StashItem } from '../types/git';
 
 export function isTauriEnvironment(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -23,6 +23,8 @@ export interface RepoSnapshot {
   changes: FileChange[];
   commits: GitCommit[];
   branches: GitBranch[];
+  /** 旧后端未返回时由调用方补空数组。 */
+  tags?: GitTag[];
   stashes: StashItem[];
   shelves: ShelfItem[];
 }

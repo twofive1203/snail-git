@@ -246,6 +246,14 @@ pub struct GitBranchDto {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GitTagDto {
+    pub name: String,
+    pub hash: String,
+    pub subject: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StashItemDto {
     pub id: String,
     pub index: u32,
@@ -328,6 +336,7 @@ pub struct RepoSnapshot {
     pub changes: Vec<FileChangeDto>,
     pub commits: Vec<GitCommitDto>,
     pub branches: Vec<GitBranchDto>,
+    pub tags: Vec<GitTagDto>,
     pub stashes: Vec<StashItemDto>,
     pub shelves: Vec<ShelfItemDto>,
 }
@@ -1193,6 +1202,37 @@ pub fn list_branches(repo: &str, current: &str) -> Result<Vec<GitBranchDto>, Str
     Ok(branches)
 }
 
+pub fn list_tags(repo: &str) -> Result<Vec<GitTagDto>, String> {
+    let output = run_git(
+        repo,
+        &[
+            "for-each-ref",
+            "--sort=-creatordate",
+            "--format=%(refname:short)\u{1f}%(*objectname:short)\u{1f}%(objectname:short)\u{1f}%(subject)",
+            "refs/tags",
+        ],
+        Duration::from_secs(15),
+    )?;
+    let text = ensure_ok(&output, "读取标签")?;
+    let mut tags = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut cols = line.split('\x1f');
+        let name = cols.next().unwrap_or("").trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let peeled = cols.next().unwrap_or("").trim().to_string();
+        let object = cols.next().unwrap_or("").trim().to_string();
+        let subject = cols.next().unwrap_or("").to_string();
+        let hash = if peeled.is_empty() { object } else { peeled };
+        tags.push(GitTagDto { name, hash, subject });
+    }
+    Ok(tags)
+}
+
 pub fn list_stashes(repo: &str) -> Result<Vec<StashItemDto>, String> {
     let output = run_git(
         repo,
@@ -1280,6 +1320,7 @@ pub fn load_snapshot(repo: &str) -> Result<RepoSnapshot, String> {
         dirty_files_count: changes.len() as u32,
         commits: git_log(&top).unwrap_or_default(),
         branches: list_branches(&top, &branch).unwrap_or_default(),
+        tags: list_tags(&top).unwrap_or_default(),
         stashes: list_stashes(&top).unwrap_or_default(),
         shelves: list_shelves(&top).unwrap_or_default(),
         current_branch: branch,
@@ -1937,8 +1978,19 @@ pub fn checkout_branch(repo: &str, name: &str) -> Result<String, String> {
         let output = run_git(&top, &["switch", "--", name], Duration::from_secs(20))?;
         return ensure_ok(&output, "检出分支");
     }
-    if name.starts_with("origin/") {
-        let local_name = name.trim_start_matches("origin/");
+    // 不限于 origin：日志左侧会列出 agent、feature 等多个上游。
+    let remote_ref = format!("refs/remotes/{name}");
+    let remote = run_git(
+        &top,
+        &["show-ref", "--verify", "--quiet", &remote_ref],
+        Duration::from_secs(8),
+    )?;
+    if remote.status.success() {
+        let local_name = name
+            .split_once('/')
+            .map(|(_, rest)| rest)
+            .filter(|rest| !rest.is_empty())
+            .unwrap_or(name);
         let tracked = run_git(&top, &["switch", "--track", name], Duration::from_secs(20))?;
         if tracked.status.success() {
             return Ok(lossy(&tracked.stdout));
@@ -4086,6 +4138,10 @@ mod tests {
         assert_eq!(log[0].subject, "init");
         assert!(log[0].refs.iter().any(|r| r.contains("main")));
         assert!(log[0].files.iter().any(|f| f.additions > 0), "commit file stats should come from numstat");
+        let tagged = run_git(&path, &["tag", "v0.1.0"], Duration::from_secs(8)).unwrap();
+        assert!(tagged.status.success(), "{}", lossy(&tagged.stderr));
+        let tags = list_tags(&path).unwrap();
+        assert!(tags.iter().any(|tag| tag.name == "v0.1.0" && !tag.hash.is_empty()));
 
         fs::write(dir.join("a.txt"), "hello\nchanged\n").unwrap();
         let diff = file_diff_opts(&path, "a.txt", false).unwrap();

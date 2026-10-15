@@ -8,6 +8,8 @@ interface SplitPaneProps {
   /** 固定尺寸的一侧：start 为左/上，end 为右/下。 */
   sized: 'start' | 'end';
   defaultSize: number;
+  /** 没有本地记录时按容器主轴比例取初始尺寸。0.5 表示一半。拖拽后改为记住像素。 */
+  defaultRatio?: number;
   min: number;
   max: number;
   /** 另一侧至少保留的像素，避免把相邻区域拖没。 */
@@ -22,14 +24,14 @@ interface SplitPaneProps {
 
 const HANDLE = 1;
 
-function readSize(key: string, fallback: number, min: number, max: number): number {
+function readStored(key: string): number | null {
   try {
     const raw = localStorage.getItem(key);
-    const n = raw ? Number(raw) : fallback;
-    if (!Number.isFinite(n)) return fallback;
-    return Math.min(max, Math.max(min, n));
+    if (raw == null || raw === '') return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
   } catch {
-    return fallback;
+    return null;
   }
 }
 
@@ -37,6 +39,7 @@ export const SplitPane: React.FC<SplitPaneProps> = ({
   orientation,
   sized,
   defaultSize,
+  defaultRatio,
   min,
   max,
   minOther = 160,
@@ -48,18 +51,22 @@ export const SplitPane: React.FC<SplitPaneProps> = ({
 }) => {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [preferred, setPreferred] = useState(() => readSize(storageKey, defaultSize, min, max));
+  const [preferred, setPreferred] = useState<number | null>(() => readStored(storageKey));
   const [containerSpan, setContainerSpan] = useState(0);
   const [dragging, setDragging] = useState(false);
   const dragRef = useRef<{ pointer: number; size: number } | null>(null);
 
   useEffect(() => {
     try {
+      if (preferred == null) {
+        if (defaultRatio == null) localStorage.setItem(storageKey, String(defaultSize));
+        return;
+      }
       localStorage.setItem(storageKey, String(preferred));
     } catch {
       /* 浏览器禁止本地存储时，尺寸只在当前会话有效 */
     }
-  }, [preferred, storageKey]);
+  }, [preferred, storageKey, defaultSize, defaultRatio]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -82,6 +89,10 @@ export const SplitPane: React.FC<SplitPaneProps> = ({
     return Math.min(max, hardMax, Math.max(min, value));
   };
 
+  const fallback = defaultRatio != null && containerSpan > HANDLE
+    ? containerSpan * defaultRatio
+    : defaultSize;
+
   const endDrag = () => {
     dragRef.current = null;
     setDragging(false);
@@ -95,7 +106,7 @@ export const SplitPane: React.FC<SplitPaneProps> = ({
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       pointer: orientation === 'horizontal' ? event.clientX : event.clientY,
-      size: fit(preferred),
+      size: fit(preferred ?? fallback),
     };
     setDragging(true);
     document.body.style.cursor = orientation === 'horizontal' ? 'col-resize' : 'row-resize';
@@ -110,7 +121,7 @@ export const SplitPane: React.FC<SplitPaneProps> = ({
     setPreferred(fit(drag.size + (client - drag.pointer) * sign));
   };
 
-  const shown = lockedSize ?? fit(preferred);
+  const shown = lockedSize ?? fit(preferred ?? fallback);
   const sizedStyle = orientation === 'horizontal' ? { width: shown } : { height: shown };
   // 只在交叉轴拉满。主轴用 flex-1 / 显式尺寸，避免 width/height:100% 把另一侧挤出容器。
   const paneClass = orientation === 'horizontal'
@@ -131,7 +142,14 @@ export const SplitPane: React.FC<SplitPaneProps> = ({
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onLostPointerCapture={endDrag}
-        onDoubleClick={() => setPreferred(fit(defaultSize))}
+        onDoubleClick={() => {
+          if (defaultRatio != null) {
+            setPreferred(null);
+            try { localStorage.removeItem(storageKey); } catch { /* 恢复比例失败时仍按当前会话的一半显示 */ }
+            return;
+          }
+          setPreferred(fit(defaultSize));
+        }}
         className={`absolute touch-none select-none ${dragging ? 'bg-jb-blue/30' : 'hover:bg-jb-blue/30'} ${
           horizontal ? 'inset-y-0 -left-[3px] w-[7px] cursor-col-resize' : 'inset-x-0 -top-[3px] h-[7px] cursor-row-resize'
         }`}

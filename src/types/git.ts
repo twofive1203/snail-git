@@ -97,6 +97,12 @@ export interface GitBranch {
   isFavorite?: boolean;
 }
 
+export interface GitTag {
+  name: string;
+  hash: string;
+  subject: string;
+}
+
 export interface ShelfItem {
   id: string;
   name: string;

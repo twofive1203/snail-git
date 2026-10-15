@@ -13,7 +13,7 @@ import { WindowResizeFrame } from './components/WindowControls';
 import { ShelveDialog } from './components/ShelfStashView/ShelveDialog';
 import { AddProjectModal, type CloneRequest } from './components/ProjectSidebar/AddProjectModal';
 import { RemotesModal } from './components/RemotesModal';
-import { DiffChunk, FileChange, GitRepository, RevisionFile, StashItem } from './types/git';
+import { DiffChunk, FileChange, GitRepository, GitTag, RevisionFile, StashItem } from './types/git';
 import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive, ArrowUp } from 'lucide-react';
 import {
   addSavedRepo,
@@ -76,6 +76,7 @@ import {
   mockRepositories,
   mockShelves,
   mockStashes,
+  mockTags,
 } from './mock/gitData';
 import { ConfirmDialog, type ConfirmAction } from './components/common/ConfirmDialog';
 import type { MessageKey } from './i18n';
@@ -118,6 +119,7 @@ export function App() {
   const [shelveDraft, setShelveDraft] = useState<{ paths: string[]; count: number; includesUnstaged: boolean } | null>(null);
   const [gitVersion, setGitVersion] = useState('Git');
   const [branches, setBranches] = useState(native ? [] : mockBranches);
+  const [tags, setTags] = useState<GitTag[]>(native ? [] : mockTags);
   const [commits, setCommits] = useState(native ? [] : mockCommits);
   const [changes, setChanges] = useState<FileChange[]>(native ? [] : mockCurrentChanges);
   const [shelves, setShelves] = useState(native ? [] : mockShelves);
@@ -166,6 +168,7 @@ export function App() {
     setChanges(snap.changes);
     setCommits(snap.commits);
     setBranches(snap.branches);
+    setTags(snap.tags ?? []);
     setStashes(snap.stashes);
     setShelves(snap.shelves);
     setRepositories(prev => prev.map(r => r.path === repoPath ? {
@@ -815,6 +818,11 @@ export function App() {
               onReset={(hash) => void run(t('toast.reset'), () => resetTo(activeRepo.path, hash))}
               currentBranch={currentBranch}
               currentUser={currentUser}
+              branches={branches}
+              tags={tags}
+              onCheckoutBranch={(name) => void run(t('toast.checkedOut', { name }), () => checkoutBranch(activeRepo.path, name))}
+              onMergeBranch={(name) => void run(t('toast.merged'), () => mergeBranch(activeRepo.path, name))}
+              onRebaseBranch={(name) => void run(t('toast.rebased'), () => rebaseOnto(activeRepo.path, name))}
               onCompareBranch={(name) => void openRevision(t('app.compareRange', { name, current: currentBranch }), `${name}..HEAD`, 'range')}
               onCreateBranch={(hash) => {
                 const name = prompt(t('toast.branchPrompt'), 'feature/');
