@@ -11,6 +11,7 @@ import { DiffModal } from './components/DiffModal';
 import { StatusBar } from './components/StatusBar';
 import { WindowResizeFrame } from './components/WindowControls';
 import { ShelveDialog } from './components/ShelfStashView/ShelveDialog';
+import { StashDialog } from './components/ShelfStashView/StashDialog';
 import { AddProjectModal, type CloneRequest } from './components/ProjectSidebar/AddProjectModal';
 import { RemotesModal } from './components/RemotesModal';
 import { PushDialog } from './components/PushDialog';
@@ -116,6 +117,8 @@ export function App() {
   const [currentUser, setCurrentUser] = useState(native ? '' : 'Li Chong');
   const [syncAction, setSyncAction] = useState<SyncAction | null>(null);
   const [shelveDraft, setShelveDraft] = useState<{ paths: string[]; count: number; includesUnstaged: boolean } | null>(null);
+  const [stashDraft, setStashDraft] = useState<number | null>(null);
+  const [stashFocus, setStashFocus] = useState(0);
   const [gitVersion, setGitVersion] = useState('Git');
   const [branches, setBranches] = useState(native ? [] : mockBranches);
   const [tags, setTags] = useState<GitTag[]>(native ? [] : mockTags);
@@ -686,6 +689,25 @@ export function App() {
     });
   };
 
+  const openStash = useCallback(() => {
+    if (changes.length === 0) {
+      showToast(t('toast.nothingToStash'), true);
+      return;
+    }
+    setStashDraft(changes.length);
+  }, [changes.length, t]);
+
+  const confirmStash = (message: string) => {
+    setStashDraft(null);
+    if (!activeRepo) return;
+    void run(t('toast.stashed'), async () => {
+      await stashSave(activeRepo.path, message);
+      setStashFocus(token => token + 1);
+      setActiveTab('shelf');
+      return t('toast.stashedDetail');
+    });
+  };
+
   useEffect(() => {
     const typingTarget = (target: EventTarget | null) => {
       const el = target as HTMLElement | null;
@@ -694,9 +716,10 @@ export function App() {
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
     };
     const onKey = (e: KeyboardEvent) => {
-      const overlayOpen = Boolean(shelveDraft) || Boolean(diffTitle) || pushOpen || isAddRepoOpen || isBranchesOpen || isRemotesOpen;
+      const overlayOpen = Boolean(shelveDraft) || stashDraft !== null || Boolean(diffTitle) || pushOpen || isAddRepoOpen || isBranchesOpen || isRemotesOpen;
       if (e.key === 'Escape') {
         if (shelveDraft) setShelveDraft(null);
+        else if (stashDraft !== null) setStashDraft(null);
         else if (diffTitle) setDiffTitle('');
         else if (isRemotesOpen && !opsLocked) setIsRemotesOpen(false);
         else if (pushOpen && !opsLocked) setPushOpen(false);
@@ -730,7 +753,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [handlePush, handleUpdate, focusList, shelveDraft, diffTitle, pushOpen, isAddRepoOpen, isBranchesOpen, isRemotesOpen, opsLocked]);
+  }, [handlePush, handleUpdate, focusList, shelveDraft, stashDraft, diffTitle, pushOpen, isAddRepoOpen, isBranchesOpen, isRemotesOpen, opsLocked]);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
@@ -752,7 +775,7 @@ export function App() {
           void revealPath(repo.path).catch(err => showToast(String(err), true));
         }}
         currentBranch={currentBranch}
-        activeMode={activeTab === 'commit' ? 'commit' : 'log'}
+        activeMode={activeTab === 'commit' ? 'commit' : activeTab === 'shelf' ? 'shelf' : 'log'}
         onModeChange={(mode) => setActiveTab(mode)}
         changesCount={changes.filter(c => c.isStaged).length}
         onOpenBranches={() => setIsBranchesOpen(true)}
@@ -782,6 +805,7 @@ export function App() {
         behindCount={behindCount}
         syncAction={syncAction}
         shelfCount={shelves.length}
+        stashCount={stashes.length}
         memoryMb={memoryMb}
       />
 
@@ -877,6 +901,7 @@ export function App() {
               onAddToGitignore={(path) => void run(t('toast.gitignore'), () => appendGitignore(activeRepo.path, path))}
               onDeleteUnversioned={(file) => void run(t('toast.fileDeleted'), () => deleteUnversioned(activeRepo.path, file.path))}
               onShelve={openShelve}
+              onStash={openStash}
               onToggleFileStage={handleToggleFile}
               onBatchToggleStage={handleBatch}
               onToggleAllStage={(staged) => handleBatch(changes, staged)}
@@ -943,10 +968,8 @@ export function App() {
               onApplyStash={(stash: StashItem) => void run(t('toast.stashApplied'), () => stashApply(activeRepo.path, stash.index, false))}
               onPopStash={(stash) => void run(t('toast.stashPopped'), () => stashApply(activeRepo.path, stash.index, true))}
               onDropStash={(stash) => void run(t('toast.stashDropped'), () => stashDrop(activeRepo.path, stash.index))}
-              onCreateStash={() => {
-                const message = prompt(t('toast.stashPrompt'), '') || 'SnailGit stash';
-                void run(t('toast.stashed'), () => stashSave(activeRepo.path, message));
-              }}
+              onCreateStash={openStash}
+              focusStashToken={stashFocus}
               onShowShelfDiff={(id) => {
                 if (!isTauriEnvironment()) {
                   showToast(t('toast.previewNoShelfDiff'), true);
@@ -1097,6 +1120,13 @@ export function App() {
           : t('app.shelveStaged', { count: shelveDraft?.count ?? 0 })}
         onCancel={() => setShelveDraft(null)}
         onConfirm={confirmShelve}
+      />
+
+      <StashDialog
+        open={stashDraft !== null}
+        fileCount={stashDraft ?? 0}
+        onCancel={() => setStashDraft(null)}
+        onConfirm={confirmStash}
       />
 
       {diffTitle && (

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Layers } from 'lucide-react';
+import { Archive, Check, ChevronDown, Layers } from 'lucide-react';
 import { useI18n } from '../../i18n/react';
 
 interface CommitActionBoxProps {
@@ -8,6 +8,7 @@ interface CommitActionBoxProps {
   onCommit: (message: string, isAmend: boolean) => void;
   onCommitAndPush: (message: string, isAmend: boolean) => void;
   onShelve: () => void;
+  onStash: () => void;
   onCreatePatch: () => void;
 }
 
@@ -17,6 +18,7 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
   onCommit,
   onCommitAndPush,
   onShelve,
+  onStash,
   onCreatePatch,
 }) => {
   const { t } = useI18n();
@@ -134,12 +136,20 @@ export const CommitActionBox: React.FC<CommitActionBoxProps> = ({
         <div className="flex items-center space-x-2 text-jb-text-muted text-[11px]">
           <span>{t('commit.staged', { count: stagedFilesCount })}</span>
           <span>•</span>
-          <button 
+          <button
             onClick={onShelve}
             className="text-jb-orange hover:underline flex items-center space-x-1"
           >
             <Layers className="w-3 h-3" />
             <span>{t('commit.shelve')}</span>
+          </button>
+          <button
+            onClick={onStash}
+            title={t('commit.stashTitle')}
+            className="text-jb-blue hover:underline flex items-center space-x-1"
+          >
+            <Archive className="w-3 h-3" />
+            <span>{t('commit.stash')}</span>
           </button>
         </div>
 

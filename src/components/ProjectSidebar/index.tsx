@@ -575,7 +575,11 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                                   {t('project.apply')}
                                 </button>
                                 <button
-                                  onClick={() => onDropStash?.(st)}
+                                  onClick={() => {
+                                    const name = st.message || `stash@{${st.index}}`;
+                                    if (!confirm(t('shelf.dropConfirm', { name }))) return;
+                                    onDropStash?.(st);
+                                  }}
                                   className="text-rose-400 hover:underline"
                                   title={t('project.dropStash')}
                                 >

@@ -26,6 +26,8 @@ interface ShelfStashViewProps {
   onCreateStash?: () => void;
   onShowShelfDiff?: (shelfId: string) => void;
   onShowStashDiff?: (stash: StashItem) => void;
+  /** 外部要求切到贮藏栈，例如刚创建完贮藏。 */
+  focusStashToken?: number;
 }
 
 export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
@@ -39,6 +41,7 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
   onCreateStash,
   onShowShelfDiff,
   onShowStashDiff,
+  focusStashToken = 0,
 }) => {
   const { t } = useI18n();
   const [activeSubTab, setActiveSubTab] = useState<'shelf' | 'stash'>('shelf');
@@ -47,6 +50,9 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
 
   useEffect(() => setShelves(initialShelves), [initialShelves]);
   useEffect(() => setStashes(initialStashes), [initialStashes]);
+  useEffect(() => {
+    if (focusStashToken > 0) setActiveSubTab('stash');
+  }, [focusStashToken]);
   const [selectedShelfId, setSelectedShelfId] = useState<string>(
     initialShelves.length > 0 ? initialShelves[0].id : ''
   );
@@ -61,6 +67,8 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
   };
 
   const handleDeleteStash = (stash: StashItem) => {
+    const name = stash.message || `stash@{${stash.index}}`;
+    if (!confirm(t('shelf.dropConfirm', { name }))) return;
     if (onDropStash) onDropStash(stash);
     else setStashes(prev => prev.filter(s => s.id !== stash.id));
   };

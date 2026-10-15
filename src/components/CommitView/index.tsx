@@ -11,6 +11,7 @@ interface CommitViewProps {
   lastCommitMessage?: string;
   onCommit: (msg: string, amend: boolean, andPush: boolean) => void;
   onShelve: () => void;
+  onStash: () => void;
   onAddToGitignore?: (path: string) => void;
   onDeleteUnversioned?: (file: FileChange) => void;
   onToggleFileStage: (file: FileChange, staged: boolean) => void;
@@ -34,6 +35,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
   lastCommitMessage,
   onCommit,
   onShelve,
+  onStash,
   onAddToGitignore,
   onDeleteUnversioned,
   onToggleFileStage,
@@ -147,6 +149,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
           onCommit={(msg, isAmend) => onCommit(msg, isAmend, false)}
           onCommitAndPush={(msg, isAmend) => onCommit(msg, isAmend, true)}
           onShelve={onShelve}
+          onStash={onStash}
           onCreatePatch={onCreatePatch}
         />
         }

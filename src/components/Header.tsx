@@ -5,6 +5,7 @@ import {
   ArrowUpFromLine, 
   CheckSquare, 
   GitGraph, 
+  Archive,
   RotateCcw, 
   RefreshCw, 
   Loader2,
@@ -30,7 +31,7 @@ import { useI18n } from '../i18n/react';
 
 export type SyncAction = 'update' | 'push' | 'fetch';
 
-export type MainViewMode = 'log' | 'commit';
+export type MainViewMode = 'log' | 'commit' | 'shelf';
 
 interface HeaderProps {
   currentRepoName?: string;
@@ -59,6 +60,7 @@ interface HeaderProps {
   behindCount?: number;
   syncAction?: SyncAction | null;
   shelfCount?: number;
+  stashCount?: number;
   memoryMb?: number;
   busyLabel?: string | null;
   operationsLocked?: boolean;
@@ -91,6 +93,7 @@ export const Header: React.FC<HeaderProps> = ({
   behindCount = 0,
   syncAction = null,
   shelfCount = 0,
+  stashCount = 0,
   memoryMb,
   busyLabel,
   operationsLocked = false,
@@ -331,7 +334,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
       </div>
 
-      {/* ─── 中区：核心双模式分段切换器 [ Log | Commit ] ─── */}
+      {/* ─── 中区：日志 / 提交 / 架藏贮藏 ─── */}
       <div className="flex items-center bg-[#2B2D30] p-0.5 rounded-lg border border-[#393B40] shadow-inner">
         <button
           onClick={() => onModeChange('log')}
@@ -372,6 +375,28 @@ export const Header: React.FC<HeaderProps> = ({
           <span className={`text-[10px] font-mono ml-0.5 hidden sm:inline ${activeMode === 'commit' ? 'text-blue-100' : 'text-[#6F737A]'}`}>
             Alt+0
           </span>
+        </button>
+
+        <button
+          onClick={() => onModeChange('shelf')}
+          className={`flex items-center space-x-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
+            activeMode === 'shelf'
+              ? 'bg-[#3574F0] text-white shadow'
+              : 'text-[#9DA0A8] hover:text-[#DFE1E5] hover:bg-[#35373C]/60'
+          }`}
+          title={t('header.shelfTitle')}
+        >
+          <Archive className="w-3.5 h-3.5" />
+          <span>{t('header.shelf')}</span>
+          {(shelfCount + stashCount) > 0 && (
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono leading-none ${
+              activeMode === 'shelf'
+                ? 'bg-white text-[#3574F0] font-bold'
+                : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+            }`}>
+              {shelfCount + stashCount}
+            </span>
+          )}
         </button>
       </div>
 
