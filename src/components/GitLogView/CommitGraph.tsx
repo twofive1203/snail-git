@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { GitCommit } from '../../types/git';
 import { 
   GitBranch, 
@@ -12,6 +12,14 @@ import {
   FileDiff 
 } from 'lucide-react';
 import { useI18n } from '../../i18n/react';
+import {
+  GraphLayout,
+  GraphLink,
+  TRACK_COLORS,
+  graphColumnWidth,
+  laneCenter,
+  layoutGraph,
+} from './graphLayout';
 
 type RefKind = 'head' | 'tag' | 'remote' | 'local';
 
@@ -89,15 +97,147 @@ function compareTargets(commit: GitCommit, currentBranch: string): string[] {
   return Array.from(names);
 }
 
-// 模拟 IDEA 经典的 6 色分支轨道配色
-const TRACK_COLORS = [
-  '#3574F0', // 轨道 0：JetBrains 蓝
-  '#59A869', // 轨道 1：绿色
-  '#B388FF', // 轨道 2：紫色
-  '#EDA200', // 轨道 3：橙黄色
-  '#29B6F6', // 轨道 4：青色
-  '#E35967', // 轨道 5：红粉色
-];
+interface RowAnchor {
+  top: number;
+  height: number;
+}
+
+function linkPath(x1: number, y1: number, x2: number, y2: number): string {
+  if (Math.abs(x1 - x2) < 0.5) return `M ${x1} ${y1} L ${x2} ${y2}`;
+  const midY = (y1 + y2) / 2;
+  return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+}
+
+function cubicPoint(
+  t: number,
+  x1: number,
+  y1: number,
+  cx1: number,
+  cy1: number,
+  cx2: number,
+  cy2: number,
+  x2: number,
+  y2: number,
+) {
+  const u = 1 - t;
+  return {
+    x: u * u * u * x1 + 3 * u * u * t * cx1 + 3 * u * t * t * cx2 + t * t * t * x2,
+    y: u * u * u * y1 + 3 * u * u * t * cy1 + 3 * u * t * t * cy2 + t * t * t * y2,
+  };
+}
+
+function arrowPoints(x1: number, y1: number, x2: number, y2: number): string {
+  const midY = (y1 + y2) / 2;
+  const t = 0.62;
+  const p = cubicPoint(t, x1, y1, x1, midY, x2, midY, x2, y2);
+  const q = cubicPoint(Math.min(t + 0.16, 0.92), x1, y1, x1, midY, x2, midY, x2, y2);
+  const vx = q.x - p.x;
+  const vy = q.y - p.y;
+  const len = Math.hypot(vx, vy) || 1;
+  const ux = vx / len;
+  const uy = vy / len;
+  const px = -uy;
+  const py = ux;
+  const length = 6;
+  const half = 3.1;
+  const tipX = p.x + ux * 2.4;
+  const tipY = p.y + uy * 2.4;
+  const baseX = tipX - ux * length;
+  const baseY = tipY - uy * length;
+  return `${tipX},${tipY} ${baseX + px * half},${baseY + py * half} ${baseX - px * half},${baseY - py * half}`;
+}
+
+function GraphOverlay({
+  layout,
+  anchors,
+  selectedIndex,
+  headRows,
+}: {
+  layout: GraphLayout;
+  anchors: RowAnchor[];
+  selectedIndex: number;
+  headRows: Set<number>;
+}) {
+  if (anchors.length === 0 || anchors.length !== layout.rows.length) return null;
+  const origin = anchors[0].top;
+  const last = anchors[anchors.length - 1];
+  const height = Math.max(1, last.top + last.height - origin);
+  const width = graphColumnWidth(layout.laneCount);
+
+  const yOf = (row: number, edge: GraphLink['fromY']) => {
+    const anchor = anchors[row];
+    const top = anchor.top - origin;
+    const bottom = row < anchors.length - 1
+      ? anchors[row + 1].top - origin
+      : top + anchor.height;
+    if (edge === 'top') return row === 0 ? top : top - 0.5;
+    if (edge === 'bottom') return row === anchors.length - 1 ? bottom : bottom + 0.5;
+    return top + anchor.height / 2;
+  };
+
+  const straight: { key: string; link: GraphLink; row: number }[] = [];
+  const curved: { key: string; link: GraphLink; row: number }[] = [];
+  layout.rows.forEach((row, index) => {
+    row.links.forEach((link, linkIndex) => {
+      const item = { key: `${index}-${linkIndex}`, link, row: index };
+      if (link.fromLane === link.toLane) straight.push(item);
+      else curved.push(item);
+    });
+  });
+
+  const drawLink = (key: string, link: GraphLink, row: number) => {
+    const x1 = laneCenter(link.fromLane);
+    const x2 = laneCenter(link.toLane);
+    const y1 = yOf(row, link.fromY);
+    const y2 = yOf(row, link.toY);
+    const color = TRACK_COLORS[link.color % TRACK_COLORS.length];
+    return (
+      <g key={key}>
+        <path
+          d={linkPath(x1, y1, x2, y2)}
+          stroke={color}
+          strokeWidth="2"
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {link.arrow && <polygon points={arrowPoints(x1, y1, x2, y2)} fill={color} />}
+      </g>
+    );
+  };
+
+  return (
+    <svg
+      aria-hidden="true"
+      className="absolute left-0 pointer-events-none z-[1]"
+      style={{ top: origin, width, height }}
+      width={width}
+      height={height}
+    >
+      {straight.map(item => drawLink(item.key, item.link, item.row))}
+      {curved.map(item => drawLink(item.key, item.link, item.row))}
+      {layout.rows.map((row, index) => {
+        const color = TRACK_COLORS[row.commitColor % TRACK_COLORS.length];
+        const cx = laneCenter(row.commitLane);
+        const cy = yOf(index, 'mid');
+        const selected = index === selectedIndex;
+        return (
+          <g key={`dot-${index}`}>
+            <circle
+              cx={cx}
+              cy={cy}
+              r={selected ? 4.5 : 3.5}
+              fill={color}
+              stroke={selected ? '#FFFFFF' : '#1E1F22'}
+              strokeWidth={selected ? 1.5 : 1}
+            />
+            {headRows.has(index) && <circle cx={cx} cy={cy} r="1.5" fill="#FFFFFF" />}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
 
 export const CommitGraph: React.FC<CommitGraphProps> = ({
   commits,
@@ -124,10 +264,20 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
 
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const [expandedRefs, setExpandedRefs] = useState<Set<string>>(new Set());
+  const [anchors, setAnchors] = useState<RowAnchor[]>([]);
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
-
-  const rowHeight = 28;
-  const colWidth = 14;
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const layout = useMemo(() => layoutGraph(commits), [commits]);
+  const graphWidth = graphColumnWidth(layout.laneCount);
+  const tableMinWidth = Math.max(760, graphWidth + 128 + 112 + 96 + 240);
+  const selectedIndex = commits.findIndex(commit => commit.hash === selectedHash);
+  const headRows = useMemo(() => {
+    const rows = new Set<number>();
+    commits.forEach((commit, index) => {
+      if (commit.refs.some(ref => ref.includes('HEAD'))) rows.add(index);
+    });
+    return rows;
+  }, [commits]);
 
   useEffect(() => {
     if (!focusToken) return;
@@ -156,15 +306,55 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
     setTimeout(() => setCopiedHash(null), 1500);
   };
 
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const measure = () => {
+      if (commits.length === 0) {
+        setAnchors(prev => (prev.length === 0 ? prev : []));
+        return;
+      }
+      if (commits.some(commit => !rowRefs.current.get(commit.hash))) return;
+      const wrapTop = wrap.getBoundingClientRect().top;
+      const next = commits.map(commit => {
+        const el = rowRefs.current.get(commit.hash)!;
+        const rect = el.getBoundingClientRect();
+        return { top: rect.top - wrapTop, height: rect.height };
+      });
+      if (next.some(item => item.height < 1)) return;
+      setAnchors(prev => {
+        if (
+          prev.length === next.length
+          && prev.every((item, index) => Math.abs(item.top - next[index].top) < 0.5 && Math.abs(item.height - next[index].height) < 0.5)
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, [commits, graphWidth, expandedRefs]);
+
   return (
     <div 
       className="flex-1 h-full min-h-0 overflow-auto overflow-x-auto bg-jb-bg select-none relative focus:outline-none"
       onClick={() => setContextMenu(prev => ({ ...prev, visible: false }))}
     >
-      <table className="w-full table-fixed border-collapse text-xs font-sans min-w-[760px]">
-        <thead className="sticky top-0 bg-jb-panel/95 border-b border-jb-border z-10 text-jb-text-muted font-medium select-none shadow-sm">
+      <div ref={wrapRef} className="relative w-full" style={{ minWidth: tableMinWidth }}>
+      <table className="w-full table-fixed border-collapse text-xs font-sans" style={{ minWidth: tableMinWidth }}>
+        <colgroup>
+          <col style={{ width: graphWidth }} />
+          <col />
+          <col style={{ width: 128 }} />
+          <col style={{ width: 112 }} />
+          <col style={{ width: 96 }} />
+        </colgroup>
+        <thead className="sticky top-0 bg-jb-panel border-b border-jb-border z-20 text-jb-text-muted font-medium select-none shadow-sm">
           <tr>
-            <th className="py-1.5 px-3 text-left font-normal w-20">{t('graph.column.graph')}</th>
+            <th className="py-1.5 px-1 text-left font-normal overflow-hidden" style={{ width: graphWidth }}>{t('graph.column.graph')}</th>
             <th className="py-1.5 px-2 text-left font-normal">{t('graph.column.description')}</th>
             <th className="py-1.5 px-2 text-left font-normal w-32">{t('graph.column.author')}</th>
             <th className="py-1.5 px-2 text-left font-normal w-28">{t('graph.column.date')}</th>
@@ -172,12 +362,15 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
           </tr>
         </thead>
         <tbody>
-          {commits.map((commit, index) => {
+          {commits.map((commit) => {
             const isSelected = commit.hash === selectedHash;
-            const track = commit.branchTrack ?? (index % 3);
-            const dotX = 14 + track * colWidth;
-            const dotY = rowHeight / 2;
-            const color = TRACK_COLORS[track % TRACK_COLORS.length];
+            const parsed = commit.refs.map(parseRef);
+            const primary = parsed.filter(item => item.kind === 'head' || item.kind === 'local');
+            const secondary = parsed.filter(item => item.kind === 'tag' || item.kind === 'remote');
+            const expanded = expandedRefs.has(commit.hash);
+            const visibleSecondary = expanded ? secondary : secondary.slice(0, 2);
+            const hiddenCount = secondary.length - visibleSecondary.length;
+            const badges = [...primary, ...visibleSecondary];
 
             return (
               <tr
@@ -194,81 +387,15 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                     : 'hover:bg-jb-hover/80 text-jb-text-primary'
                 }`}
               >
-                {/* 拓扑分支图轨道单元格 */}
-                <td className="p-0 relative w-20 overflow-hidden">
-                  <svg 
-                    className="w-full h-7 block" 
-                    height={rowHeight}
-                  >
-                    {/* 贯穿竖线或分支连线 */}
-                    {index < commits.length - 1 && (
-                      <line 
-                        x1={dotX} 
-                        y1={dotY} 
-                        x2={dotX} 
-                        y2={rowHeight} 
-                        stroke={color} 
-                        strokeWidth="2" 
-                        strokeLinecap="round"
-                      />
-                    )}
-                    {index > 0 && (
-                      <line 
-                        x1={dotX} 
-                        y1={0} 
-                        x2={dotX} 
-                        y2={dotY} 
-                        stroke={color} 
-                        strokeWidth="2" 
-                        strokeLinecap="round"
-                      />
-                    )}
+                <td className="p-0" style={{ width: graphWidth, minWidth: graphWidth }} />
 
-                    {/* 如果有多分支合并或分叉效果（例如首个 commit 与其分支连接） */}
-                    {commit.parents.length > 1 && (
-                      <path 
-                        d={`M ${dotX} ${dotY} C ${dotX + colWidth * 2} ${dotY}, ${dotX + colWidth * 2} ${rowHeight}, ${dotX + colWidth * 2} ${rowHeight}`} 
-                        stroke={TRACK_COLORS[(track + 1) % TRACK_COLORS.length]} 
-                        strokeWidth="2" 
-                        fill="none" 
-                      />
-                    )}
-
-                    {/* Commit 节点圆点 */}
-                    <circle 
-                      cx={dotX} 
-                      cy={dotY} 
-                      r={isSelected ? 4.5 : 3.5} 
-                      fill={color} 
-                      stroke={isSelected ? '#FFFFFF' : '#1E1F22'} 
-                      strokeWidth={isSelected ? '1.5' : '1'} 
-                    />
-
-                    {/* HEAD 当前分支指示心 */}
-                    {commit.refs.some(r => r.includes('HEAD')) && (
-                      <circle 
-                        cx={dotX} 
-                        cy={dotY} 
-                        r="1.5" 
-                        fill="#FFFFFF" 
-                      />
-                    )}
-                  </svg>
-                </td>
-
-                {/* 描述与 Branch / Tag 徽章 */}
                 <td className="py-1 px-2 overflow-hidden">
-                  <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
-                    {(() => {
-                      const parsed = commit.refs.map(parseRef);
-                      const primary = parsed.filter(item => item.kind === 'head' || item.kind === 'local');
-                      const secondary = parsed.filter(item => item.kind === 'tag' || item.kind === 'remote');
-                      const expanded = expandedRefs.has(commit.hash);
-                      const visibleSecondary = expanded ? secondary : secondary.slice(0, 2);
-                      const hiddenCount = secondary.length - visibleSecondary.length;
-                      return (
-                        <>
-                          {[...primary, ...visibleSecondary].map(item => (
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="truncate min-w-0" title={commit.subject}>{commit.subject}</span>
+                    {badges.length > 0 && (
+                      <div className="ml-auto flex items-center gap-1 shrink-0 max-w-[58%] min-w-0">
+                        <div className="flex items-center gap-1 min-w-0 overflow-hidden">
+                          {badges.map(item => (
                             <RefBadge
                               key={item.title}
                               item={item}
@@ -285,27 +412,26 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                               }}
                             />
                           ))}
-                          {secondary.length > 2 && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setExpandedRefs(prev => {
-                                  const next = new Set(prev);
-                                  if (next.has(commit.hash)) next.delete(commit.hash);
-                                  else next.add(commit.hash);
-                                  return next;
-                                });
-                              }}
-                              title={expanded ? t('graph.collapseRefs') : t('graph.moreRefs', { count: hiddenCount })}
-                              className="text-[10px] px-1.5 py-0.5 rounded-full border border-jb-border bg-jb-panel text-jb-text-muted hover:text-jb-text-primary shrink-0"
-                            >
-                              {expanded ? '–' : `+${hiddenCount}`}
-                            </button>
-                          )}
-                        </>
-                      );
-                    })()}
-                    <span className="truncate min-w-0">{commit.subject}</span>
+                        </div>
+                        {secondary.length > 2 && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedRefs(prev => {
+                                const next = new Set(prev);
+                                if (next.has(commit.hash)) next.delete(commit.hash);
+                                else next.add(commit.hash);
+                                return next;
+                              });
+                            }}
+                            title={expanded ? t('graph.collapseRefs') : t('graph.moreRefs', { count: hiddenCount })}
+                            className="text-[10px] px-1.5 py-0.5 rounded-full border border-jb-border bg-jb-panel text-jb-text-muted hover:text-jb-text-primary shrink-0"
+                          >
+                            {expanded ? '–' : `+${hiddenCount}`}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </td>
 
@@ -340,6 +466,13 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
           })}
         </tbody>
       </table>
+      <GraphOverlay
+        layout={layout}
+        anchors={anchors}
+        selectedIndex={selectedIndex}
+        headRows={headRows}
+      />
+      </div>
 
       {/* IDEA 经典右键快捷菜单 */}
       {contextMenu.visible && contextMenu.commit && (
