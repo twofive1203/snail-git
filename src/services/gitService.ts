@@ -1,4 +1,4 @@
-import { ConflictView, DiffChunk, FileChange, FileMeta, GitBranch, GitCommit, GitRepository, PatchFile, RevisionFile, ShelfItem, StashItem } from '../types/git';
+import { ConflictView, DiffChunk, FileChange, FileMeta, GitBranch, GitCommit, GitRemote, GitRepository, PatchFile, RemoteList, RevisionFile, ShelfItem, StashItem } from '../types/git';
 
 export function isTauriEnvironment(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -210,6 +210,34 @@ export async function pickDirectory(): Promise<string | null> {
 
 export async function fetchRepo(repoPath: string): Promise<string> {
   return invokeTauri<string>('fetch_repo', { repoPath });
+}
+
+export async function listRemotes(repoPath: string): Promise<RemoteList> {
+  return invokeTauri<RemoteList>('list_remotes', { repoPath });
+}
+
+export async function addRemote(repoPath: string, name: string, url: string): Promise<GitRemote> {
+  return invokeTauri<GitRemote>('add_remote', { repoPath, name, url });
+}
+
+export async function renameRemote(repoPath: string, oldName: string, newName: string): Promise<void> {
+  await invokeTauri('rename_remote', { repoPath, oldName, newName });
+}
+
+export async function setRemoteUrl(repoPath: string, name: string, fetchUrl: string, pushUrl?: string): Promise<GitRemote> {
+  return invokeTauri<GitRemote>('set_remote_url', { repoPath, name, fetchUrl, pushUrl });
+}
+
+export async function removeRemote(repoPath: string, name: string): Promise<void> {
+  await invokeTauri('remove_remote', { repoPath, name });
+}
+
+export async function fetchRemote(repoPath: string, name: string): Promise<string> {
+  return invokeTauri<string>('fetch_remote', { repoPath, name });
+}
+
+export async function cloneRepo(url: string, parent: string, directory: string): Promise<string> {
+  return invokeTauri<string>('clone_repo', { url, parent, directory });
 }
 
 export async function createPatch(repoPath: string, paths: string[]): Promise<string> {

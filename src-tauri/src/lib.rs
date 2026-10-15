@@ -293,6 +293,48 @@ fn fetch_repo(app: AppHandle, repo_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn list_remotes(repo_path: String) -> Result<git_ops::RemoteListDto, String> {
+    git_ops::list_remotes(&repo_path)
+}
+
+#[tauri::command]
+fn add_remote(repo_path: String, name: String, url: String) -> Result<git_ops::GitRemoteDto, String> {
+    git_ops::add_remote(&repo_path, &name, &url)
+}
+
+#[tauri::command]
+fn rename_remote(repo_path: String, old_name: String, new_name: String) -> Result<(), String> {
+    git_ops::rename_remote(&repo_path, &old_name, &new_name)
+}
+
+#[tauri::command]
+fn set_remote_url(
+    repo_path: String,
+    name: String,
+    fetch_url: String,
+    push_url: Option<String>,
+) -> Result<git_ops::GitRemoteDto, String> {
+    git_ops::set_remote_url(&repo_path, &name, &fetch_url, push_url.as_deref())
+}
+
+#[tauri::command]
+fn remove_remote(repo_path: String, name: String) -> Result<(), String> {
+    git_ops::remove_remote(&repo_path, &name)
+}
+
+#[tauri::command]
+fn fetch_remote(app: AppHandle, repo_path: String, name: String) -> Result<String, String> {
+    let repo = repo_path.clone();
+    git_ops::fetch_remote(&repo_path, &name, &mut |line| emit_git_progress(&app, &repo, line))
+}
+
+#[tauri::command]
+fn clone_repo(app: AppHandle, url: String, parent: String, directory: String) -> Result<String, String> {
+    let parent_key = parent.clone();
+    git_ops::clone_repo(&url, &parent, &directory, &mut |line| emit_git_progress(&app, &parent_key, line))
+}
+
+#[tauri::command]
 fn create_patch(repo_path: String, paths: Vec<String>) -> Result<String, String> {
     git_ops::create_patch(&repo_path, &paths)
 }
@@ -491,6 +533,13 @@ pub fn run() {
             delete_shelf,
             pick_directory,
             fetch_repo,
+            list_remotes,
+            add_remote,
+            rename_remote,
+            set_remote_url,
+            remove_remote,
+            fetch_remote,
+            clone_repo,
             create_patch,
             list_revision_files,
             load_revision_diff,

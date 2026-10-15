@@ -11,7 +11,8 @@ import { DiffModal } from './components/DiffModal';
 import { StatusBar } from './components/StatusBar';
 import { WindowResizeFrame } from './components/WindowControls';
 import { ShelveDialog } from './components/ShelfStashView/ShelveDialog';
-import { AddProjectModal } from './components/ProjectSidebar/AddProjectModal';
+import { AddProjectModal, type CloneRequest } from './components/ProjectSidebar/AddProjectModal';
+import { RemotesModal } from './components/RemotesModal';
 import { DiffChunk, FileChange, GitRepository, RevisionFile, StashItem } from './types/git';
 import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive, ArrowUp } from 'lucide-react';
 import {
@@ -28,6 +29,8 @@ import {
   deleteShelf,
   deleteUnversioned,
   discardPaths,
+  cloneRepo,
+  fetchRemote,
   fetchRepo,
   inspectFile,
   isTauriEnvironment,
@@ -123,6 +126,7 @@ export function App() {
 
   const [isBranchesOpen, setIsBranchesOpen] = useState(false);
   const [isAddRepoOpen, setIsAddRepoOpen] = useState(false);
+  const [isRemotesOpen, setIsRemotesOpen] = useState(false);
   const [memoryMb, setMemoryMb] = useState(0);
   const [fileEncoding, setFileEncoding] = useState('—');
   const [lineEnding, setLineEnding] = useState('—');
@@ -348,6 +352,42 @@ export function App() {
       await refresh(repoPath);
     });
   }, [guardNetwork, refresh]);
+
+  const handleFetchRemote = useCallback((name: string) => {
+    return guardNetwork('fetch', async (repoPath) => {
+      const text = await fetchRemote(repoPath, name);
+      showToast(text ? t('toast.fetchedDetail', { detail: text.split('\n')[0] }) : t('toast.remoteFetched', { name }));
+      acceptProgress.current = false;
+      setBusyLabel(null);
+      await refresh(repoPath);
+    });
+  }, [guardNetwork, refresh]);
+
+  const handleCloneRepo = async (request: CloneRequest) => {
+    if (!isTauriEnvironment()) {
+      showToast(t('toast.previewNoWrite'), true);
+      return;
+    }
+    if (opLock.current) return;
+    opLock.current = true;
+    setOpsLocked(true);
+    setBusyLabel(t('toast.cloning'));
+    acceptProgress.current = true;
+    try {
+      await setWatchPaused(true);
+      const path = await cloneRepo(request.url, request.parent, request.directory);
+      const repo = await addSavedRepo(request.name, path);
+      setRepositories(prev => [repo, ...prev.filter(item => item.id !== repo.id)]);
+      setActiveRepoId(repo.id);
+      setIsAddRepoOpen(false);
+      showToast(t('toast.cloned', { name: repo.name }));
+    } catch (err) {
+      showToast(String(err), true);
+    } finally {
+      await setWatchPaused(false).catch(() => undefined);
+      releaseOp();
+    }
+  };
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
@@ -634,11 +674,12 @@ export function App() {
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
     };
     const onKey = (e: KeyboardEvent) => {
-      const overlayOpen = Boolean(shelveDraft) || Boolean(diffTitle) || isAddRepoOpen || isBranchesOpen;
+      const overlayOpen = Boolean(shelveDraft) || Boolean(diffTitle) || isAddRepoOpen || isBranchesOpen || isRemotesOpen;
       if (e.key === 'Escape') {
         if (shelveDraft) setShelveDraft(null);
         else if (diffTitle) setDiffTitle('');
-        else if (isAddRepoOpen) setIsAddRepoOpen(false);
+        else if (isAddRepoOpen && !opsLocked) setIsAddRepoOpen(false);
+        else if (isRemotesOpen && !opsLocked) setIsRemotesOpen(false);
         else if (isBranchesOpen) setIsBranchesOpen(false);
         else if (typingTarget(e.target)) (e.target as HTMLElement).blur();
         window.dispatchEvent(new Event('easygit:dismiss'));
@@ -668,7 +709,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [handlePush, handleUpdate, focusList, shelveDraft, diffTitle, isAddRepoOpen, isBranchesOpen]);
+  }, [handlePush, handleUpdate, focusList, shelveDraft, diffTitle, isAddRepoOpen, isBranchesOpen, isRemotesOpen, opsLocked]);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
@@ -697,6 +738,7 @@ export function App() {
         onUpdateClick={handleUpdate}
         onPushClick={handlePush}
         onFetchClick={handleFetch}
+        onOpenRemotes={activeRepo && native ? () => setIsRemotesOpen(true) : undefined}
         busyLabel={busyLabel}
         operationsLocked={opsLocked}
         hasConflict={changes.some(c => c.status === 'conflict')}
@@ -968,9 +1010,27 @@ export function App() {
 
       <AddProjectModal
         isOpen={isAddRepoOpen}
-        onClose={() => setIsAddRepoOpen(false)}
+        onClose={() => {
+          if (!opsLocked) setIsAddRepoOpen(false);
+        }}
         onAdd={(name, path) => { void handleAddRepo(name, path); }}
+        onClone={handleCloneRepo}
         onBrowse={pickDirectory}
+        busy={opsLocked && isAddRepoOpen}
+        busyLabel={busyLabel}
+      />
+
+      <RemotesModal
+        isOpen={isRemotesOpen && Boolean(activeRepo)}
+        repoPath={activeRepo?.path || ''}
+        operationsLocked={opsLocked}
+        onClose={() => {
+          if (!opsLocked) setIsRemotesOpen(false);
+        }}
+        onFetch={handleFetchRemote}
+        onChanged={() => {
+          if (activeRepo) void refresh(activeRepo.path);
+        }}
       />
 
       <ShelveDialog

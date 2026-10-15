@@ -288,6 +288,23 @@ pub struct SavedRepoDto {
     pub last_opened: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemoteDto {
+    pub name: String,
+    pub fetch_url: String,
+    pub push_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteListDto {
+    pub remotes: Vec<GitRemoteDto>,
+    pub current_branch: String,
+    pub upstream_remote: Option<String>,
+    pub upstream_branch: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SavedRepoDisk {
@@ -470,6 +487,7 @@ fn output_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String>
 }
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(90);
+const CLONE_TIMEOUT: Duration = Duration::from_secs(600);
 const NETWORK_STALL: Duration = Duration::from_secs(30);
 const LOGIN_HINT: &str = "请先在终端完成登录后再试。";
 const STALL_HINT: &str = "连接远程没有响应。若需要登录，请先在终端完成凭据登录后再试。";
@@ -3293,6 +3311,268 @@ pub fn fetch_repo(repo: &str, on_progress: &mut dyn FnMut(&str)) -> Result<Strin
     Err(if msg.trim().is_empty() { "刷新远程引用失败".into() } else { msg })
 }
 
+fn validate_remote_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.starts_with('-')
+        || name.starts_with('.')
+        || name.ends_with('.')
+        || name.ends_with('/')
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains(':')
+        || name.contains("..")
+        || name.contains('@')
+        || name.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return Err(format!("无效的远程名：{name}"));
+    }
+    Ok(())
+}
+
+fn validate_remote_url(url: &str) -> Result<(), String> {
+    let lower = url.to_ascii_lowercase();
+    // ext:: / fd:: 会让 Git 执行本地命令。名称和地址都不允许以 - 开头，避免被当成选项。
+    if url.is_empty()
+        || url.starts_with('-')
+        || lower.starts_with("ext::")
+        || lower.starts_with("fd::")
+        || url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return Err("远程地址无效。不要以 - 开头，也不能包含空格。".into());
+    }
+    Ok(())
+}
+
+fn validate_clone_directory(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.starts_with('-')
+        || name.ends_with('.')
+        || name.ends_with(' ')
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains(':')
+        || name.chars().any(|ch| ch.is_control() || matches!(ch, '<' | '>' | '"' | '|' | '?' | '*'))
+    {
+        return Err(format!("无效的文件夹名：{name}"));
+    }
+    Ok(())
+}
+
+fn directory_from_url(url: &str) -> Result<String, String> {
+    let trimmed = url.trim().trim_end_matches(['/', '\\']);
+    let last = trimmed.rsplit(['/', '\\', ':']).next().unwrap_or("");
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    validate_clone_directory(name)?;
+    Ok(name.to_string())
+}
+
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+fn remote_url(repo: &str, name: &str, push: bool) -> Result<String, String> {
+    // 名称已拒绝以 - 开头，不必再插入 --。remote 子命令对 -- 的支持并不一致。
+    let output = if push {
+        run_git(repo, &["remote", "get-url", "--push", name], Duration::from_secs(8))?
+    } else {
+        run_git(repo, &["remote", "get-url", name], Duration::from_secs(8))?
+    };
+    ensure_ok(&output, "读取远程地址")
+}
+
+fn read_remote(repo: &str, name: &str) -> Result<GitRemoteDto, String> {
+    let fetch_url = remote_url(repo, name, false)?;
+    let push_url = remote_url(repo, name, true).unwrap_or_else(|_| fetch_url.clone());
+    Ok(GitRemoteDto {
+        name: name.to_string(),
+        fetch_url,
+        push_url,
+    })
+}
+
+pub fn list_remotes(repo: &str) -> Result<RemoteListDto, String> {
+    let top = validate_repo(repo)?;
+    let names = remotes(&top)?;
+    let mut items = Vec::with_capacity(names.len());
+    for name in names {
+        items.push(read_remote(&top, &name)?);
+    }
+    let branch = current_branch(&top).map(|(name, _)| name).unwrap_or_default();
+    let tracked = !branch.is_empty() && branch != "HEAD";
+    let upstream_remote = if tracked {
+        config_get(&top, &format!("branch.{branch}.remote"))
+    } else {
+        None
+    };
+    let upstream_branch = if tracked {
+        config_get(&top, &format!("branch.{branch}.merge"))
+            .map(|merge| merge.strip_prefix("refs/heads/").unwrap_or(&merge).to_string())
+    } else {
+        None
+    };
+    Ok(RemoteListDto {
+        remotes: items,
+        current_branch: branch,
+        upstream_remote,
+        upstream_branch,
+    })
+}
+
+pub fn add_remote(repo: &str, name: &str, url: &str) -> Result<GitRemoteDto, String> {
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    let url = url.trim();
+    validate_remote_name(name)?;
+    validate_remote_url(url)?;
+    let output = run_git(&top, &["remote", "add", name, url], Duration::from_secs(8))?;
+    ensure_ok(&output, "添加远程")?;
+    read_remote(&top, name)
+}
+
+pub fn rename_remote(repo: &str, old_name: &str, new_name: &str) -> Result<(), String> {
+    let top = validate_repo(repo)?;
+    let old_name = old_name.trim();
+    let new_name = new_name.trim();
+    validate_remote_name(old_name)?;
+    validate_remote_name(new_name)?;
+    if old_name == new_name {
+        return Ok(());
+    }
+    let output = run_git(&top, &["remote", "rename", old_name, new_name], Duration::from_secs(8))?;
+    ensure_ok(&output, "重命名远程")?;
+    Ok(())
+}
+
+pub fn set_remote_url(repo: &str, name: &str, fetch_url: &str, push_url: Option<&str>) -> Result<GitRemoteDto, String> {
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    let fetch_url = fetch_url.trim();
+    validate_remote_name(name)?;
+    validate_remote_url(fetch_url)?;
+    let push = push_url.map(str::trim).filter(|url| !url.is_empty()).unwrap_or(fetch_url);
+    validate_remote_url(push)?;
+    let output = run_git(&top, &["remote", "set-url", name, fetch_url], Duration::from_secs(8))?;
+    ensure_ok(&output, "修改获取地址")?;
+    let output = run_git(&top, &["remote", "set-url", "--push", name, push], Duration::from_secs(8))?;
+    ensure_ok(&output, "修改推送地址")?;
+    read_remote(&top, name)
+}
+
+pub fn remove_remote(repo: &str, name: &str) -> Result<(), String> {
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    validate_remote_name(name)?;
+    let output = run_git(&top, &["remote", "remove", name], Duration::from_secs(8))?;
+    ensure_ok(&output, "移除远程")?;
+    Ok(())
+}
+
+pub fn fetch_remote(repo: &str, name: &str, on_progress: &mut dyn FnMut(&str)) -> Result<String, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    validate_remote_name(name)?;
+    on_progress("正在连接远程，若弹出登录窗口请完成登录");
+    let output = run_git_streaming(
+        &top,
+        &["fetch", "--progress", "--prune", "--", name],
+        NETWORK_TIMEOUT,
+        Some(NETWORK_STALL),
+        on_progress,
+    )?;
+    let text = finish_network(&output, "获取")?;
+    let line = first_line(&text);
+    Ok(if line.is_empty() { format!("已获取 {name}") } else { line })
+}
+
+fn cleanup_failed_clone(dest: &Path) -> Option<String> {
+    if !dest.exists() {
+        return None;
+    }
+    fs::remove_dir_all(dest)
+        .err()
+        .map(|err| format!("克隆失败后未能删除不完整目录 {}：{err}", dest.display()))
+}
+
+/// 克隆到用户选定的父目录下。凭据仍由系统 Git 处理，这里不保存密码。
+pub fn clone_repo(
+    url: &str,
+    parent: &str,
+    directory: &str,
+    on_progress: &mut dyn FnMut(&str),
+) -> Result<String, String> {
+    let _pause = WatchPauseGuard::new();
+    let url = url.trim();
+    validate_remote_url(url)?;
+    let parent_path = Path::new(parent.trim());
+    if !parent_path.is_dir() {
+        return Err("保存目录不存在".into());
+    }
+    let folder = if directory.trim().is_empty() {
+        directory_from_url(url)?
+    } else {
+        let name = directory.trim();
+        validate_clone_directory(name)?;
+        name.to_string()
+    };
+    let parent_canon = fs::canonicalize(parent_path).map_err(|err| format!("无法定位保存目录：{err}"))?;
+    let dest = parent_canon.join(&folder);
+    if !dest.starts_with(&parent_canon) {
+        return Err("目标路径越出保存目录".into());
+    }
+    if dest.exists() {
+        return Err("目标文件夹已存在".into());
+    }
+    let parent_arg = strip_verbatim_prefix(&parent_canon);
+    let dest_arg = strip_verbatim_prefix(&dest);
+    let parent_s = parent_arg.to_string_lossy().to_string();
+    let dest_s = dest_arg.to_string_lossy().to_string();
+    on_progress("正在克隆，若弹出登录窗口请完成登录");
+    let cloned = run_git_streaming(
+        &parent_s,
+        &["clone", "--progress", "--", url, &dest_s],
+        CLONE_TIMEOUT,
+        Some(NETWORK_STALL),
+        on_progress,
+    );
+    match cloned {
+        Ok(output) if output.status.success() => validate_repo(&dest_s),
+        Ok(output) => {
+            let leftover = cleanup_failed_clone(&dest_arg);
+            let mut err = match finish_network(&output, "克隆") {
+                Ok(text) => {
+                    let line = first_line(&text);
+                    if line.is_empty() { "克隆失败".into() } else { format!("克隆失败：{line}") }
+                }
+                Err(err) => err,
+            };
+            if let Some(note) = leftover {
+                err.push('\n');
+                err.push_str(&note);
+            }
+            Err(err)
+        }
+        Err(err) => {
+            let leftover = cleanup_failed_clone(&dest_arg);
+            Err(match leftover {
+                Some(note) => format!("{err}\n{note}"),
+                None => err,
+            })
+        }
+    }
+}
+
 fn pick_save_path(default_name: &str) -> Result<Option<String>, String> {
     let safe = default_name.replace('\\', "").replace('\'', "");
     let script = format!(
@@ -4286,6 +4566,57 @@ mod tests {
         let local_s = local.to_string_lossy().to_string();
         git_ok(&root_s, &["clone", &origin_s, &local_s]);
         (root, origin_s, local_s)
+    }
+
+    #[test]
+    fn remote_crud_and_local_fetch_do_not_touch_network() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("easy-git-remote-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let origin = root.join("origin");
+        init_repo(&origin);
+        let origin_s = origin.to_string_lossy().to_string();
+        fs::write(origin.join("a.txt"), "v1\n").unwrap();
+        git_ok(&origin_s, &["add", "."]);
+        git_ok(&origin_s, &["commit", "-m", "v1"]);
+
+        let local = root.join("local");
+        init_repo(&local);
+        let local_s = local.to_string_lossy().to_string();
+        assert!(add_remote(&local_s, "-origin", &origin_s).is_err());
+        assert!(add_remote(&local_s, "origin", "--upload-pack=evil").is_err());
+        assert!(add_remote(&local_s, "origin", "ext::calc").is_err());
+        add_remote(&local_s, "origin", &origin_s).unwrap();
+        let listed = list_remotes(&local_s).unwrap();
+        assert_eq!(listed.remotes.len(), 1);
+        assert_eq!(listed.remotes[0].name, "origin");
+        assert_eq!(listed.remotes[0].fetch_url, origin_s);
+
+        let push_url = root.join("push-only").to_string_lossy().to_string();
+        set_remote_url(&local_s, "origin", &origin_s, Some(&push_url)).unwrap();
+        rename_remote(&local_s, "origin", "upstream").unwrap();
+        let renamed = list_remotes(&local_s).unwrap();
+        assert_eq!(renamed.remotes[0].name, "upstream");
+        assert_eq!(renamed.remotes[0].push_url, push_url);
+        set_remote_url(&local_s, "upstream", &origin_s, None).unwrap();
+
+        let fetched = fetch_remote(&local_s, "upstream", &mut |_| {}).unwrap();
+        assert!(!fetched.is_empty());
+        remove_remote(&local_s, "upstream").unwrap();
+        assert!(list_remotes(&local_s).unwrap().remotes.is_empty());
+
+        let parent = root.join("clones");
+        fs::create_dir_all(&parent).unwrap();
+        assert!(clone_repo(&origin_s, &parent.to_string_lossy(), "..", &mut |_| {}).is_err());
+        assert!(clone_repo("-evil", &parent.to_string_lossy(), "copy", &mut |_| {}).is_err());
+        let cloned = clone_repo(&origin_s, &parent.to_string_lossy(), "copy", &mut |_| {}).unwrap();
+        assert!(Path::new(&cloned).join(".git").exists() || Path::new(&cloned).join(".git").is_file());
+        assert!(clone_repo(&origin_s, &parent.to_string_lossy(), "copy", &mut |_| {}).is_err());
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn head_matches_upstream(repo: &str) -> bool {

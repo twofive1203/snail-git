@@ -15,6 +15,7 @@ import {
   MoreHorizontal, 
   AlertTriangle, 
   GitMerge,
+  Cloud,
   Copy,
   ExternalLink,
   Plus,
@@ -49,6 +50,7 @@ interface HeaderProps {
   onUpdateClick: () => void;
   onPushClick: () => void;
   onFetchClick: () => void;
+  onOpenRemotes?: () => void;
   onRollbackClick: () => void;
   onShelfClick: () => void;
   onOpenMerge?: () => void;
@@ -80,6 +82,7 @@ export const Header: React.FC<HeaderProps> = ({
   onUpdateClick,
   onPushClick,
   onFetchClick,
+  onOpenRemotes,
   onRollbackClick,
   onShelfClick,
   onOpenMerge,
@@ -464,6 +467,20 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <GitMerge className="w-3.5 h-3.5 text-purple-400" />
                   <span>{t('header.merge')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!onOpenRemotes || operationsLocked}
+                  onClick={() => {
+                    onOpenRemotes?.();
+                    setIsMoreMenuOpen(false);
+                  }}
+                  title={t('header.remotesTitle')}
+                  className="w-full px-3 py-1.5 text-left text-[#DFE1E5] hover:bg-[#35373C] flex items-center space-x-2 transition-colors disabled:opacity-40"
+                >
+                  <Cloud className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{t('header.remotes')}</span>
                 </button>
 
                 <div className="my-1 border-t border-[#393B40]" />

@@ -119,6 +119,19 @@ export interface StashItem {
   fileCount: number;
 }
 
+export interface GitRemote {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+}
+
+export interface RemoteList {
+  remotes: GitRemote[];
+  currentBranch: string;
+  upstreamRemote?: string | null;
+  upstreamBranch?: string | null;
+}
+
 export interface GitRepository {
   id: string;
   name: string;
