@@ -68,7 +68,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     isFolder: boolean;
     file?: FileChange;
   } | null>(null);
-  const storageKey = `easygit.changelists.${repoKey}`;
+  const storageKey = `snailgit.changelists.${repoKey}`;
   const [changelistNames, setChangelistNames] = useState<string[]>(['更改']);
   const [assignments, setAssignments] = useState<Record<string, string>>({});
   const [activeList, setActiveList] = useState('全部');
@@ -214,8 +214,8 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
 
   useEffect(() => {
     const dismiss = () => setContextMenu(null);
-    window.addEventListener('easygit:dismiss', dismiss);
-    return () => window.removeEventListener('easygit:dismiss', dismiss);
+    window.addEventListener('snailgit:dismiss', dismiss);
+    return () => window.removeEventListener('snailgit:dismiss', dismiss);
   }, []);
 
   // 切换折叠/展开

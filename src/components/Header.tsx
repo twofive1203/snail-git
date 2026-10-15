@@ -65,7 +65,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  currentRepoName = 'easy-git',
+  currentRepoName = 'snail-git',
   currentRepoPath = '',
   repositories = [],
   activeRepoId = '',
@@ -117,10 +117,10 @@ export const Header: React.FC<HeaderProps> = ({
       setIsRepoMenuOpen(false);
       setIsMoreMenuOpen(false);
     };
-    window.addEventListener('easygit:dismiss', dismiss);
+    window.addEventListener('snailgit:dismiss', dismiss);
     return () => {
       window.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('easygit:dismiss', dismiss);
+      window.removeEventListener('snailgit:dismiss', dismiss);
     };
   }, []);
 
@@ -155,7 +155,7 @@ export const Header: React.FC<HeaderProps> = ({
             <FolderGit2 className="w-3.5 h-3.5" />
           </div>
           <span className="font-bold tracking-tight bg-gradient-to-r from-blue-400 via-indigo-300 to-sky-300 bg-clip-text text-transparent text-sm">
-            EasyGit
+            SnailGit
           </span>
         </div>
 

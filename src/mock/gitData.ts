@@ -3,8 +3,8 @@ import { GitCommit, GitBranch, GitTag, FileChange, ShelfItem, StashItem, FileCha
 export const mockRepositories: GitRepository[] = [
   {
     id: 'repo-1',
-    name: 'easy-git',
-    path: 'D:/workspace/aiwork/easy-git',
+    name: 'snail-git',
+    path: 'D:/workspace/aiwork/snail-git',
     currentBranch: 'main',
     aheadCount: 1,
     behindCount: 0,
@@ -133,7 +133,7 @@ export const mockBranches: GitBranch[] = [
 export const mockTags: GitTag[] = [
   { name: 'v1.3.0-rc1', hash: 'a71b2d3', subject: 'feat(core): 实现高性能 Git 拓扑图谱 SVG 渲染算法' },
   { name: 'v1.2.0', hash: '9a21b33', subject: 'perf: 替换原生 libgit2 索引读取，内存占用减少 65%' },
-  { name: 'v1.0.0', hash: '2c78a01', subject: 'Initial commit: 创建 easy-git 基础架构与工程脚手架' },
+  { name: 'v1.0.0', hash: '2c78a01', subject: 'Initial commit: 创建 snail-git 基础架构与工程脚手架' },
   { name: '6.7-ai分支备份', hash: '5e87a91', subject: 'fix(ipc): 修复 Windows 平台下管道通信长输出挂起问题' },
 ];
 
@@ -144,7 +144,7 @@ export const mockCommits: GitCommit[] = [
     subject: 'feat(core): 实现高性能 Git 拓扑图谱 SVG 渲染算法',
     body: '采用多轨道贝塞尔曲线计算合并与分支分叉，支持万级提交快速虚拟化呈现。\n- 优化节点碰撞检测\n- 降低 DOM 节点数',
     author: 'Li Chong',
-    authorEmail: 'lichong@easygit.org',
+    authorEmail: 'lichong@snailgit.org',
     date: '2025-05-18 16:42:10',
     relativeDate: '10 分钟前',
     parents: ['3b8112c', 'c83d5a2'],
@@ -196,7 +196,7 @@ export const mockCommits: GitCommit[] = [
     subject: 'refactor(diff): 优化双栏 Diff Token 级比对计算',
     body: '引入 Myers 差异比对算法结合单词粒度 Levenshtein 距离，让行内微小变动一目了然。',
     author: 'Li Chong',
-    authorEmail: 'lichong@easygit.org',
+    authorEmail: 'lichong@snailgit.org',
     date: '2025-05-17 19:30:15',
     relativeDate: '昨天 19:30',
     parents: ['5e87a91'],
@@ -245,7 +245,7 @@ export const mockCommits: GitCommit[] = [
     subject: 'perf: 替换原生 libgit2 索引读取，内存占用减少 65%',
     body: '通过流式遍历 Git packfile 和 tree 对象，避免一次性在内存中构建庞大的对象树。',
     author: 'Li Chong',
-    authorEmail: 'lichong@easygit.org',
+    authorEmail: 'lichong@snailgit.org',
     date: '2025-05-15 17:44:12',
     relativeDate: '3 天前',
     parents: ['2c78a01'],
@@ -259,10 +259,10 @@ export const mockCommits: GitCommit[] = [
   {
     hash: '2c78a01d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b',
     shortHash: '2c78a01',
-    subject: 'Initial commit: 创建 easy-git 基础架构与工程脚手架',
+    subject: 'Initial commit: 创建 snail-git 基础架构与工程脚手架',
     body: '极致轻量、内存占用 < 80MB 的 IDEA 风格现代化 Git 客户端项目初始化。',
     author: 'Li Chong',
-    authorEmail: 'lichong@easygit.org',
+    authorEmail: 'lichong@snailgit.org',
     date: '2025-05-10 10:00:00',
     relativeDate: '8 天前',
     parents: [],

@@ -703,7 +703,7 @@ export function App() {
         else if (isAddRepoOpen && !opsLocked) setIsAddRepoOpen(false);
         else if (isBranchesOpen) setIsBranchesOpen(false);
         else if (typingTarget(e.target)) (e.target as HTMLElement).blur();
-        window.dispatchEvent(new Event('easygit:dismiss'));
+        window.dispatchEvent(new Event('snailgit:dismiss'));
         e.preventDefault();
         focusList();
         return;
@@ -736,7 +736,7 @@ export function App() {
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
       <WindowResizeFrame />
       <Header
-        currentRepoName={activeRepo?.name || (native ? t('header.noRepo') : 'easy-git')}
+        currentRepoName={activeRepo?.name || (native ? t('header.noRepo') : 'snail-git')}
         currentRepoPath={activeRepo?.path || (native ? t('header.addRepoHint') : '')}
         repositories={repositories}
         activeRepoId={activeRepoId}
@@ -944,7 +944,7 @@ export function App() {
               onPopStash={(stash) => void run(t('toast.stashPopped'), () => stashApply(activeRepo.path, stash.index, true))}
               onDropStash={(stash) => void run(t('toast.stashDropped'), () => stashDrop(activeRepo.path, stash.index))}
               onCreateStash={() => {
-                const message = prompt(t('toast.stashPrompt'), '') || 'EasyGit stash';
+                const message = prompt(t('toast.stashPrompt'), '') || 'SnailGit stash';
                 void run(t('toast.stashed'), () => stashSave(activeRepo.path, message));
               }}
               onShowShelfDiff={(id) => {

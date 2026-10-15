@@ -3,7 +3,7 @@ import { en, zh, type MessageKey } from './messages';
 export type Locale = 'zh' | 'en';
 export type { MessageKey };
 
-export const LOCALE_STORAGE_KEY = 'easy-git.locale';
+export const LOCALE_STORAGE_KEY = 'snail-git.locale';
 
 const TITLES: Record<Locale, string> = {
   zh: zh['app.title'],
@@ -19,7 +19,29 @@ type Listener = (locale: Locale) => void;
 
 const listeners = new Set<Listener>();
 
+function migrateLegacyStorage() {
+  try {
+    const moves: Array<[string, string]> = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (key.startsWith('easygit.')) moves.push([key, `snailgit.${key.slice('easygit.'.length)}`]);
+      else if (key.startsWith('easy-git.')) moves.push([key, `snail-git.${key.slice('easy-git.'.length)}`]);
+    }
+    for (const [from, to] of moves) {
+      if (localStorage.getItem(to) == null) {
+        const value = localStorage.getItem(from);
+        if (value != null) localStorage.setItem(to, value);
+      }
+      localStorage.removeItem(from);
+    }
+  } catch {
+    // 旧键迁不过去时使用新键默认值，不阻塞启动。
+  }
+}
+
 function readStoredLocale(): Locale {
+  migrateLegacyStorage();
   try {
     const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
     if (stored === 'zh' || stored === 'en') return stored;

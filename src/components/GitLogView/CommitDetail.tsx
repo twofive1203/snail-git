@@ -21,7 +21,7 @@ interface CommitDetailProps {
   onCollapsedChange?: (collapsed: boolean) => void;
 }
 
-const SPLIT_KEY = 'easygit.commitDetail.splitRatio';
+const SPLIT_KEY = 'snailgit.commitDetail.splitRatio';
 
 function readSplitRatio(): number {
   try {

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "EasyGit",
+  "productName": "SnailGit",
   "version": "0.1.0",
-  "identifier": "org.easygit.desktop",
+  "identifier": "org.snailgit.desktop",
   "build": {
     "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:60606",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "EasyGit - 极致轻量级 IDEA 风格 Git 管理器",
+        "title": "SnailGit - 极致轻量级 IDEA 风格 Git 管理器",
         "create": false,
         "width": 1280,
         "height": 820,

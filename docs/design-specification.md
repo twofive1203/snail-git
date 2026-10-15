@@ -1,4 +1,4 @@
-# EasyGit 设计规格说明书与 IDEA Git 功能调研深度报告
+# SnailGit 设计规格说明书与 IDEA Git 功能调研深度报告
 
 ## 一、 项目背景与痛点定位
 
@@ -8,7 +8,7 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 - **冷启动迟缓**：如果开发者仅仅想要查看 Git Log、对比两分支差异、解决代码冲突或挑拣提交（Cherry-pick），启动一次 IDEA 需要等待数十秒。
 - **轻量替代品痛点**：现有的轻量客户端中，GitKraken 资源占用同样偏大且商业收费，Sourcetree 界面老旧卡顿，VS Code 的 Git 体验相较于 IDEA 在双栏 Diff、Shelf（架藏）、3-Way Merge 冲突解决和拓扑图上存在明显差距。
 
-### 1.2 EasyGit 的核心目标
+### 1.2 SnailGit 的核心目标
 - **极致轻量**：运行时常驻内存控制在 **40 MB ~ 80 MB**，毫秒级瞬间秒开。
 - **1:1 复刻 IDEA 核心手感**：
   1. JetBrains New UI 暗黑高质感视觉体系；
@@ -23,7 +23,7 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 
 ## 二、 IntelliJ IDEA Git 功能深度调研分解
 
-| 模块 | IDEA 原型特性 | EasyGit 还原与设计重点 |
+| 模块 | IDEA 原型特性 | SnailGit 还原与设计重点 |
 | :--- | :--- | :--- |
 | **Git Log (Alt+9)** | 多彩色轨道拓扑图、Ref Badges (HEAD, Branch, Tag)、多维过滤 (Branch, User, Date, Path, Search)、双栏联动文件树与提交详情抽屉、右键快捷菜单 (Cherry-pick, Reset, Revert, Checkout Revision) | SVG 动态轨道计算、短 Hash 一键复制、全字段模糊搜索与多重过滤联动 |
 | **Commit (Alt+0)** | Default Changelist、Unversioned Files、文件状态颜色 (M蓝色/A绿色/D删除/冲突红)、多选框勾选提交、提交前检查、Commit 与 Commit & Push 复合按钮 | 树状与扁平变更切换、行级复选框勾选、前缀药丸快速填充、Amend 复选框、支持直接架藏 |
@@ -34,7 +34,7 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 
 ---
 
-## 三、 EasyGit 技术架构演进路线
+## 三、 SnailGit 技术架构演进路线
 
 ```
 [前端表现层 (当前阶段)]

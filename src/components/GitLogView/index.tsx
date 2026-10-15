@@ -147,7 +147,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   const [detailCollapsed, setDetailCollapsed] = useState(false);
   const [branchesCollapsed, setBranchesCollapsed] = useState(() => {
     try {
-      return localStorage.getItem('easygit.log.branchesCollapsed') === '1';
+      return localStorage.getItem('snailgit.log.branchesCollapsed') === '1';
     } catch {
       return false;
     }
@@ -155,7 +155,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
 
   useEffect(() => {
     try {
-      localStorage.setItem('easygit.log.branchesCollapsed', branchesCollapsed ? '1' : '0');
+      localStorage.setItem('snailgit.log.branchesCollapsed', branchesCollapsed ? '1' : '0');
     } catch {
       /* 浏览器禁止本地存储时，收起状态只在当前会话有效 */
     }
@@ -447,7 +447,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         min={200}
         max={960}
         minOther={360}
-        storageKey="easygit.log.branchWidth"
+        storageKey="snailgit.log.branchWidth"
         lockedSize={branchesCollapsed ? 28 : undefined}
         className="flex-1 min-h-0"
         start={
@@ -490,7 +490,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         min={120}
         max={720}
         minOther={120}
-        storageKey="easygit.log.detailHeight"
+        storageKey="snailgit.log.detailHeight"
         lockedSize={detailCollapsed ? 28 : undefined}
         className="flex-1 min-h-0"
         start={

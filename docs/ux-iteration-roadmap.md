@@ -1,8 +1,8 @@
-# EasyGit 产品体验优化与迭代开发规划文档 (UX Iteration Roadmap)
+# SnailGit 产品体验优化与迭代开发规划文档 (UX Iteration Roadmap)
 
 > **版本**：v1.0.0  
 > **制定日期**：2025-02  
-> **文档定位**：指导 EasyGit 从“可用原型”向“工业级轻量 Git 生产力工具”迈进的交互体验与界面工程迭代路线图。  
+> **文档定位**：指导 SnailGit 从“可用原型”向“工业级轻量 Git 生产力工具”迈进的交互体验与界面工程迭代路线图。  
 > **核心指标**：保持常驻内存 < 50MB、秒级启动、1:1 复刻 JetBrains IntelliJ IDEA 核心 Git 交互心智。
 
 ---

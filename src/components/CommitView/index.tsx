@@ -84,7 +84,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
       min={200}
       max={960}
       minOther={280}
-      storageKey="easygit.commit.treeWidth"
+      storageKey="snailgit.commit.treeWidth"
       className="flex-1 h-full bg-jb-bg"
       start={
       <ChangelistTree
@@ -117,7 +117,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
         min={140}
         max={520}
         minOther={96}
-        storageKey="easygit.commit.actionHeight"
+        storageKey="snailgit.commit.actionHeight"
         className="h-full w-full"
         start={
         <div className="flex-1 h-full min-h-0 flex flex-col overflow-hidden">

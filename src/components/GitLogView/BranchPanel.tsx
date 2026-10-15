@@ -133,10 +133,10 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
       close();
     };
     window.addEventListener('mousedown', onPointer);
-    window.addEventListener('easygit:dismiss', close);
+    window.addEventListener('snailgit:dismiss', close);
     return () => {
       window.removeEventListener('mousedown', onPointer);
-      window.removeEventListener('easygit:dismiss', close);
+      window.removeEventListener('snailgit:dismiss', close);
     };
   }, [menu]);
 

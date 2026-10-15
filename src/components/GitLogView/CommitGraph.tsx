@@ -296,8 +296,8 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
 
   useEffect(() => {
     const dismiss = () => setContextMenu(prev => ({ ...prev, visible: false }));
-    window.addEventListener('easygit:dismiss', dismiss);
-    return () => window.removeEventListener('easygit:dismiss', dismiss);
+    window.addEventListener('snailgit:dismiss', dismiss);
+    return () => window.removeEventListener('snailgit:dismiss', dismiss);
   }, []);
 
   const handleContextMenu = (e: React.MouseEvent, commit: GitCommit) => {

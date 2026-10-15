@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for EasyGit desktop window",
+  "description": "Default permissions for SnailGit desktop window",
   "windows": [
     "main"
   ],

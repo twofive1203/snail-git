@@ -14,6 +14,7 @@ dist-ssr/
 src-tauri/target/
 **/EBWebView/
 **/webview2-data/
+**/snail-git-data/
 **/easy-git-data/
 
 # Local scratch and debug leftovers

@@ -490,7 +490,12 @@ fn prepare_data_dir(dir: &std::path::Path) -> Result<(), String> {
 fn data_dir_candidates() -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        dirs.push(std::path::PathBuf::from(local).join("easy-git").join("webview2"));
+        let next = std::path::PathBuf::from(&local).join("snail-git").join("webview2");
+        git_ops::adopt_legacy_dir(
+            &next,
+            &std::path::PathBuf::from(local).join("easy-git").join("webview2"),
+        );
+        dirs.push(next);
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
@@ -550,9 +555,9 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
         return Err(tauri::Error::Io(std::io::Error::other("没有可用的托盘图标")));
     };
     let handle = app.handle();
-    let menu = tray_menu(handle, "显示 EasyGit", "退出")?;
+    let menu = tray_menu(handle, "显示 SnailGit", "退出")?;
     TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("EasyGit")
+        .tooltip("SnailGit")
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -604,7 +609,7 @@ fn open_main_window(app: &tauri::App) -> Result<(), tauri::Error> {
         }
         eprintln!("[SETUP_DEBUG] using data dir {}", dir.display());
         return tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-            .title("EasyGit - IDEA Style Git Manager")
+            .title("SnailGit - IDEA Style Git Manager")
             .inner_size(1280.0, 820.0)
             .min_inner_size(900.0, 600.0)
             .resizable(true)
@@ -719,5 +724,5 @@ pub fn run() {
             set_tray_locale
         ])
         .run(tauri::generate_context!())
-        .expect("error while running easy-git tauri application");
+        .expect("error while running snail-git tauri application");
 }

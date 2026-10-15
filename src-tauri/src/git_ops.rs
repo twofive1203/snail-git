@@ -367,18 +367,35 @@ fn ensure_writable(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 从 EasyGit 改名后，新目录还不存在时把旧数据目录挪过来，避免仓库列表和架藏丢失。
+pub(crate) fn adopt_legacy_dir(target: &Path, legacy: &Path) {
+    if target.exists() || !legacy.is_dir() {
+        return;
+    }
+    if let Some(parent) = target.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::rename(legacy, target);
+}
+
 pub fn writable_data_dir() -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local).join("EasyGit"));
+        let next = PathBuf::from(&local).join("SnailGit");
+        adopt_legacy_dir(&next, &PathBuf::from(local).join("EasyGit"));
+        candidates.push(next);
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("easy-git-data"));
+            let next = parent.join("snail-git-data");
+            adopt_legacy_dir(&next, &parent.join("easy-git-data"));
+            candidates.push(next);
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("target").join("easy-git-data"));
+        let next = cwd.join("target").join("snail-git-data");
+        adopt_legacy_dir(&next, &cwd.join("target").join("easy-git-data"));
+        candidates.push(next);
     }
     let mut errors = Vec::new();
     for dir in candidates {
@@ -2664,7 +2681,7 @@ fn stash_update_changes(top: &str) -> Result<bool, String> {
     let before = stash_entry_count(top)?;
     let stash = run_git(
         top,
-        &["stash", "push", "--include-untracked", "-m", "EasyGit update"],
+        &["stash", "push", "--include-untracked", "-m", "SnailGit update"],
         Duration::from_secs(60),
     )?;
     if !stash.status.success() {
@@ -3626,7 +3643,7 @@ pub fn push_to(
 
 pub fn stash_save(repo: &str, message: &str) -> Result<String, String> {
     let top = validate_repo(repo)?;
-    let msg = if message.trim().is_empty() { "EasyGit stash" } else { message.trim() };
+    let msg = if message.trim().is_empty() { "SnailGit stash" } else { message.trim() };
     let output = run_git(&top, &["stash", "push", "-u", "-m", msg], Duration::from_secs(20))?;
     ensure_ok(&output, "贮藏")
 }
@@ -4432,7 +4449,7 @@ pub fn create_patch(repo: &str, paths: &[String]) -> Result<String, String> {
     if text.trim().is_empty() {
         return Err("没有可导出的文本差异".into());
     }
-    let Some(dest) = pick_save_path("easy-git.patch")? else {
+    let Some(dest) = pick_save_path("snail-git.patch")? else {
         return Ok("已取消".into());
     };
     fs::write(&dest, text).map_err(|err| format!("写入补丁失败：{err}"))?;
@@ -4728,7 +4745,7 @@ pub fn smart_merge_conflict(repo: &str, path: &str) -> Result<String, String> {
     if view.ours.is_empty() && view.theirs.is_empty() {
         return Ok(view.working);
     }
-    let dir = std::env::temp_dir().join(format!("easy-git-merge-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("snail-git-merge-{}", std::process::id()));
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     let base = dir.join("base");
     let ours = dir.join("ours");
@@ -4853,7 +4870,7 @@ mod tests {
     }
 
     fn temp_repo() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("easy-git-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("snail-git-test-{}", std::process::id()));
         if dir.exists() {
             let _ = fs::remove_dir_all(&dir);
         }
@@ -4861,8 +4878,8 @@ mod tests {
         let path = dir.to_string_lossy().to_string();
         let init = run_git(&path, &["init", "-b", "main"], Duration::from_secs(10)).unwrap();
         assert!(init.status.success(), "{}", lossy(&init.stderr));
-        let _ = run_git(&path, &["config", "user.email", "test@easygit.local"], Duration::from_secs(5));
-        let _ = run_git(&path, &["config", "user.name", "EasyGit Test"], Duration::from_secs(5));
+        let _ = run_git(&path, &["config", "user.email", "test@snailgit.local"], Duration::from_secs(5));
+        let _ = run_git(&path, &["config", "user.name", "SnailGit Test"], Duration::from_secs(5));
         fs::write(dir.join("a.txt"), "hello\n").unwrap();
         dir
     }
@@ -4966,9 +4983,9 @@ mod tests {
         rename_branch(&path, "feature-smoke", "feature-renamed").unwrap();
         run_git(&path, &["switch", "-f", "main"], Duration::from_secs(15)).unwrap();
         delete_branch(&path, "feature-renamed", false, true).unwrap();
-        let (old_spans, new_spans) = word_spans("hello world", "hello EasyGit");
+        let (old_spans, new_spans) = word_spans("hello world", "hello SnailGit");
         assert!(old_spans.iter().any(|span| span.kind == "del" && span.text.contains("world")));
-        assert!(new_spans.iter().any(|span| span.kind == "add" && span.text.contains("EasyGit")));
+        assert!(new_spans.iter().any(|span| span.kind == "add" && span.text.contains("SnailGit")));
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -4979,7 +4996,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let dir = std::env::temp_dir().join(format!("easy-git-log-{}-{stamp}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("snail-git-log-{}-{stamp}", std::process::id()));
         if dir.exists() {
             let _ = fs::remove_dir_all(&dir);
         }
@@ -4987,15 +5004,15 @@ mod tests {
         let path = dir.to_string_lossy().to_string();
         let init = run_git(&path, &["init", "-b", "main"], Duration::from_secs(10)).unwrap();
         assert!(init.status.success(), "{}", lossy(&init.stderr));
-        let _ = run_git(&path, &["config", "user.email", "test@easygit.local"], Duration::from_secs(5));
-        let _ = run_git(&path, &["config", "user.name", "EasyGit Test"], Duration::from_secs(5));
+        let _ = run_git(&path, &["config", "user.email", "test@snailgit.local"], Duration::from_secs(5));
+        let _ = run_git(&path, &["config", "user.name", "SnailGit Test"], Duration::from_secs(5));
 
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("src/old.txt"), "old\n").unwrap();
         stage_paths(&path, &["src/old.txt".into()]).unwrap();
         let other = run_git(
             &path,
-            &["commit", "--author", "Other Person <other@easygit.local>", "-m", "alpha unique"],
+            &["commit", "--author", "Other Person <other@snailgit.local>", "-m", "alpha unique"],
             Duration::from_secs(15),
         )
         .unwrap();
@@ -5087,7 +5104,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("easy-git-update-conflict-{stamp}"));
+        let root = std::env::temp_dir().join(format!("snail-git-update-conflict-{stamp}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let origin = root.join("origin");
@@ -5134,7 +5151,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("easy-git-update-blocked-{stamp}"));
+        let root = std::env::temp_dir().join(format!("snail-git-update-blocked-{stamp}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let origin = root.join("origin");
@@ -5186,7 +5203,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("easy-git-pending-{stamp}"));
+        let root = std::env::temp_dir().join(format!("snail-git-pending-{stamp}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let repo = root.join("repo");
@@ -5242,8 +5259,8 @@ mod tests {
         fs::create_dir_all(path).unwrap();
         let cwd = path.to_string_lossy().to_string();
         git_ok(&cwd, &["init", "-b", "main"]);
-        git_ok(&cwd, &["config", "user.email", "test@easygit.local"]);
-        git_ok(&cwd, &["config", "user.name", "EasyGit Test"]);
+        git_ok(&cwd, &["config", "user.email", "test@snailgit.local"]);
+        git_ok(&cwd, &["config", "user.name", "SnailGit Test"]);
     }
 
     #[test]
@@ -5252,7 +5269,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("easy-git-sync-{stamp}"));
+        let root = std::env::temp_dir().join(format!("snail-git-sync-{stamp}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let bare = root.join("origin.git");
@@ -5286,7 +5303,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("easy-git-push-preview-{stamp}"));
+        let root = std::env::temp_dir().join(format!("snail-git-push-preview-{stamp}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let bare = root.join("origin.git");
@@ -5355,7 +5372,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("easy-git-update-{stamp}"));
+        let root = std::env::temp_dir().join(format!("snail-git-update-{stamp}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let origin = root.join("origin");
@@ -5401,7 +5418,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("easy-git-update-clean-{stamp}"));
+        let root = std::env::temp_dir().join(format!("snail-git-update-clean-{stamp}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let origin = root.join("origin");
@@ -5435,7 +5452,7 @@ mod tests {
     /// 已提交、不领先、远程有新提交：直接快进，不出合并提交。
     #[test]
     fn update_fast_forwards_when_local_has_no_unique_commits() {
-        let (root, origin_s, local_s) = cloned_pair("easy-git-update-ff");
+        let (root, origin_s, local_s) = cloned_pair("snail-git-update-ff");
         let origin = root.join("origin");
         fs::write(origin.join("a.txt"), "v2\n").unwrap();
         git_ok(&origin_s, &["add", "a.txt"]);
@@ -5451,7 +5468,7 @@ mod tests {
     /// 两边都有独有提交时仍要合并提交，不能因为允许快进就把分叉当成快进。
     #[test]
     fn update_creates_merge_commit_when_histories_diverge() {
-        let (root, origin_s, local_s) = cloned_pair("easy-git-update-diverge");
+        let (root, origin_s, local_s) = cloned_pair("snail-git-update-diverge");
         let origin = root.join("origin");
         let local = root.join("local");
         fs::write(origin.join("b.txt"), "remote\n").unwrap();
@@ -5477,7 +5494,7 @@ mod tests {
 
     #[test]
     fn update_rebase_skips_confirm_when_dirty_file_is_untouched() {
-        let (root, origin_s, local_s) = cloned_pair("easy-git-update-rebase-clean");
+        let (root, origin_s, local_s) = cloned_pair("snail-git-update-rebase-clean");
         let origin = root.join("origin");
         let local = root.join("local");
         git_ok(&local_s, &["config", "pull.rebase", "true"]);
@@ -5502,7 +5519,7 @@ mod tests {
 
     #[test]
     fn update_rebase_asks_then_stashes_overlapping_changes() {
-        let (root, origin_s, local_s) = cloned_pair("easy-git-update-rebase-overlap");
+        let (root, origin_s, local_s) = cloned_pair("snail-git-update-rebase-overlap");
         let origin = root.join("origin");
         let local = root.join("local");
         git_ok(&local_s, &["config", "pull.rebase", "true"]);
@@ -5554,7 +5571,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("easy-git-remote-{stamp}"));
+        let root = std::env::temp_dir().join(format!("snail-git-remote-{stamp}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let origin = root.join("origin");

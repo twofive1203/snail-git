@@ -1,11 +1,11 @@
 [package]
-name = "easy-git"
+name = "snail-git"
 version = "0.1.0"
 description = "Lightweight IDEA style Git client"
 edition = "2021"
 
 [lib]
-name = "easy_git_lib"
+name = "snail_git_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
