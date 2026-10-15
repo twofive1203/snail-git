@@ -223,6 +223,25 @@ fn push_repo(app: AppHandle, repo_path: String, allow_set_upstream: bool) -> Res
 }
 
 #[tauri::command]
+fn preview_push(repo_path: String, remote: Option<String>, branch: Option<String>) -> Result<git_ops::PushPreview, String> {
+    git_ops::preview_push(&repo_path, remote.as_deref(), branch.as_deref())
+}
+
+#[tauri::command]
+fn push_to(
+    app: AppHandle,
+    repo_path: String,
+    remote: String,
+    branch: String,
+    set_upstream: bool,
+) -> Result<git_ops::SyncOutcome, String> {
+    let repo = repo_path.clone();
+    git_ops::push_to(&repo_path, &remote, &branch, set_upstream, &mut |line| {
+        emit_git_progress(&app, &repo, line)
+    })
+}
+
+#[tauri::command]
 fn set_watch_paused(paused: bool) {
     if paused {
         git_ops::pause_watch();
@@ -520,6 +539,8 @@ pub fn run() {
             rebase_onto,
             update_repo,
             push_repo,
+            preview_push,
+            push_to,
             set_watch_paused,
             stash_save,
             stash_apply,

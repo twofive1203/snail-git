@@ -163,6 +163,42 @@ export async function pushRepo(repoPath: string, allowSetUpstream = false): Prom
   return invokeTauri<SyncOutcome>('push_repo', { repoPath, allowSetUpstream });
 }
 
+export interface PushPreview {
+  localBranch: string;
+  remote: string;
+  targetBranch: string;
+  hasUpstream: boolean;
+  upstreamRemote: string;
+  upstreamBranch: string;
+  targetExists: boolean;
+  willSetUpstream: boolean;
+  remotes: string[];
+  remoteBranches: string[];
+  ahead: number;
+  behind: number;
+  truncated: boolean;
+  commits: GitCommit[];
+}
+
+export interface PushTarget {
+  remote: string;
+  branch: string;
+  setUpstream: boolean;
+}
+
+/** 只读本地远程跟踪引用，列出将要推送的提交。remote/branch 为空时由后端选默认目标。 */
+export async function previewPush(repoPath: string, remote?: string, branch?: string): Promise<PushPreview> {
+  return invokeTauri<PushPreview>('preview_push', {
+    repoPath,
+    ...(remote ? { remote } : {}),
+    ...(branch ? { branch } : {}),
+  });
+}
+
+export async function pushTo(repoPath: string, remote: string, branch: string, setUpstream: boolean): Promise<SyncOutcome> {
+  return invokeTauri<SyncOutcome>('push_to', { repoPath, remote, branch, setUpstream });
+}
+
 export async function stashSave(repoPath: string, message: string): Promise<string> {
   return invokeTauri<string>('stash_save', { repoPath, message });
 }
