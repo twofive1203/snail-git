@@ -318,6 +318,9 @@ export const zh = {
   'logBranches.merge': '合并到当前分支',
   'logBranches.rebase': '变基到此分支',
   'logBranches.current': '当前',
+  'logBranches.update': '更新',
+  'logBranches.push': '推送...',
+  'logBranches.rename': '重命名...',
 
   'project.title': '添加已有的 Git 项目',
   'project.path': '项目本地路径',
@@ -881,6 +884,9 @@ export const en: Record<MessageKey, string> = {
   'logBranches.merge': 'Merge into current branch',
   'logBranches.rebase': 'Rebase onto this',
   'logBranches.current': 'Current',
+  'logBranches.update': 'Update',
+  'logBranches.push': 'Push...',
+  'logBranches.rename': 'Rename...',
 
   'project.title': 'Add an existing Git project',
   'project.path': 'Local project path',

@@ -3530,17 +3530,61 @@ fn log_range_commits(repo: &str, rev_args: &[&str]) -> Result<(Vec<GitCommitDto>
     Ok((commits, truncated))
 }
 
+/// 空源表示当前检出分支。有源时不要求 HEAD 是分支，便于分离头指针时推送其他本地分支。
+fn resolve_push_source(repo: &str, source: Option<&str>) -> Result<String, String> {
+    let Some(name) = source.map(str::trim).filter(|name| !name.is_empty()) else {
+        let (local, _) = require_branch(repo)?;
+        validate_push_branch(&local)?;
+        return Ok(local);
+    };
+    validate_push_branch(name)?;
+    let full = format!("refs/heads/{name}");
+    if !ref_exists(repo, &full) {
+        return Err(format!("本地分支 {name} 不存在"));
+    }
+    Ok(name.to_string())
+}
+
+fn branch_upstream(repo: &str, branch: &str) -> Option<String> {
+    let spec = format!("{branch}@{{upstream}}");
+    let output = run_git(
+        repo,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", &spec],
+        Duration::from_secs(8),
+    )
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = lossy(&output.stdout);
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn is_ancestor(repo: &str, ancestor: &str, descendant: &str) -> bool {
+    run_git(
+        repo,
+        &["merge-base", "--is-ancestor", ancestor, descendant],
+        Duration::from_secs(15),
+    )
+    .map(|output| output.status.success())
+    .unwrap_or(false)
+}
+
 /// 推送前预览。默认目标跟 IDEA：已有上游则用上游，否则用 origin（或唯一远程）加本地同名分支。
-/// 提交列表只读本地远程跟踪引用，不上网。
-pub fn preview_push(repo: &str, remote: Option<&str>, branch: Option<&str>) -> Result<PushPreview, String> {
+/// 提交列表只读本地远程跟踪引用，不上网。`source` 为空时源是当前分支。
+pub fn preview_push(
+    repo: &str,
+    remote: Option<&str>,
+    branch: Option<&str>,
+    source: Option<&str>,
+) -> Result<PushPreview, String> {
     let top = validate_repo(repo)?;
-    let (local, _) = require_branch(&top)?;
-    validate_push_branch(&local)?;
+    let local = resolve_push_source(&top, source)?;
     let known = remotes(&top)?;
     if known.is_empty() {
         return Err("没有配置远程仓库".into());
     }
-    let upstream = upstream_ref(&top);
+    let upstream = branch_upstream(&top, &local);
     let (up_remote, up_branch) = upstream.as_deref().map(split_upstream).unwrap_or_default();
     let remote = if let Some(name) = remote.map(str::trim).filter(|name| !name.is_empty()) {
         validate_remote_name(name)?;
@@ -3564,14 +3608,14 @@ pub fn preview_push(repo: &str, remote: Option<&str>, branch: Option<&str>) -> R
     let remote_ref = format!("refs/remotes/{remote}/{target}");
     let target_exists = ref_exists(&top, &remote_ref);
     let (ahead, behind, rev_args_owned) = if target_exists {
-        let range = format!("HEAD...{remote_ref}");
+        let range = format!("{local}...{remote_ref}");
         let (ahead, behind) = left_right_count(&top, &range);
-        (ahead, behind, vec![format!("{remote_ref}..HEAD")])
+        (ahead, behind, vec![format!("{remote_ref}..{local}")])
     } else {
-        // 远程还没有这个分支时，列出尚未出现在该远程跟踪分支上的提交。
+        // 远程还没有这个分支时，列出源分支上尚未出现在该远程跟踪分支上的提交。
         let not_remote = format!("--remotes={remote}");
-        let ahead = rev_list_count(&top, &["HEAD", "--not", &not_remote]);
-        (ahead, 0, vec!["HEAD".into(), "--not".into(), not_remote])
+        let ahead = rev_list_count(&top, &[&local, "--not", &not_remote]);
+        (ahead, 0, vec![local.clone(), "--not".into(), not_remote])
     };
     let rev_args: Vec<&str> = rev_args_owned.iter().map(String::as_str).collect();
     let (commits, truncated) = if ahead == 0 && target_exists {
@@ -3603,16 +3647,16 @@ pub fn push_to(
     remote: &str,
     branch: &str,
     set_upstream: bool,
+    source: Option<&str>,
     on_progress: &mut dyn FnMut(&str),
 ) -> Result<SyncOutcome, String> {
     let _pause = WatchPauseGuard::new();
     let top = validate_repo(repo)?;
-    let (local, _) = require_branch(&top)?;
     let remote = remote.trim();
     let branch = branch.trim();
     validate_remote_name(remote)?;
-    validate_push_branch(&local)?;
     validate_push_branch(branch)?;
+    let local = resolve_push_source(&top, source)?;
     let known = remotes(&top)?;
     if !known.iter().any(|name| name == remote) {
         return Err(format!("远程 {remote} 不存在"));
@@ -3628,6 +3672,7 @@ pub fn push_to(
     on_progress("正在连接远程，若弹出登录窗口请完成登录");
     let output = run_git_streaming(&top, &refs, NETWORK_TIMEOUT, Some(NETWORK_STALL), on_progress)?;
     let text = finish_network(&output, "推送")?;
+    // 计数始终描述当前 HEAD，避免推送其他分支时改写状态栏。
     let (ahead, behind) = ahead_behind(&top);
     let fallback = if set_upstream { "已推送并设置上游" } else { "已推送" };
     Ok(sync_outcome(
@@ -3637,6 +3682,125 @@ pub fn push_to(
         behind,
         remote,
         branch,
+        Vec::new(),
+    ))
+}
+
+/// 只快进未检出的本地分支。当前分支必须走 `update_repo`，以免绕过工作区确认。
+pub fn update_local_branch(
+    repo: &str,
+    name: &str,
+    on_progress: &mut dyn FnMut(&str),
+) -> Result<SyncOutcome, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    validate_branch_name(name)?;
+    let full = format!("refs/heads/{name}");
+    if !ref_exists(&top, &full) {
+        return Err(format!("本地分支 {name} 不存在"));
+    }
+    let (current, _) = current_branch(&top)?;
+    if name == current {
+        return Err("当前分支请使用项目更新".into());
+    }
+    let remote = choose_remote(&top, name)?;
+    on_progress("正在连接远程，若弹出登录窗口请完成登录");
+    let fetched = run_git_streaming(
+        &top,
+        &["fetch", "--progress", "--prune", &remote],
+        NETWORK_TIMEOUT,
+        Some(NETWORK_STALL),
+        on_progress,
+    )?;
+    finish_network(&fetched, "拉取")?;
+    let (ahead, behind) = ahead_behind(&top);
+    let Some(upstream) = branch_upstream(&top, name) else {
+        return Ok(sync_outcome(
+            "ok",
+            format!("已刷新远程，但分支 {name} 没有上游，未合并。"),
+            ahead,
+            behind,
+            &remote,
+            name,
+            Vec::new(),
+        ));
+    };
+    let (up_remote, up_branch) = split_upstream(&upstream);
+    if up_remote.is_empty() || up_branch.is_empty() || !ref_exists(&top, &format!("refs/remotes/{upstream}")) {
+        return Ok(sync_outcome(
+            "blocked",
+            format!("分支 {name} 的上游 {upstream} 不存在，未合并。"),
+            ahead,
+            behind,
+            &remote,
+            name,
+            Vec::new(),
+        ));
+    }
+    if up_remote != remote {
+        let extra = run_git_streaming(
+            &top,
+            &["fetch", "--progress", "--prune", &up_remote],
+            NETWORK_TIMEOUT,
+            Some(NETWORK_STALL),
+            on_progress,
+        )?;
+        finish_network(&extra, "拉取")?;
+    }
+    let local_sha = ensure_ok(
+        &run_git(&top, &["rev-parse", "--verify", &full], Duration::from_secs(8))?,
+        "读取分支",
+    )?;
+    let upstream_sha = ensure_ok(
+        &run_git(
+            &top,
+            &["rev-parse", "--verify", &format!("refs/remotes/{upstream}")],
+            Duration::from_secs(8),
+        )?,
+        "读取上游",
+    )?;
+    if local_sha == upstream_sha || is_ancestor(&top, &upstream_sha, &local_sha) {
+        let message = if local_sha == upstream_sha {
+            format!("分支 {name} 已是最新")
+        } else {
+            format!("分支 {name} 已包含上游，未移动")
+        };
+        return Ok(sync_outcome(
+            "up_to_date",
+            message,
+            ahead,
+            behind,
+            &up_remote,
+            name,
+            Vec::new(),
+        ));
+    }
+    if !is_ancestor(&top, &local_sha, &upstream_sha) {
+        return Ok(sync_outcome(
+            "blocked",
+            format!("分支 {name} 与上游 {upstream} 已分叉，不能在未检出时快进。请先检出后再更新。"),
+            ahead,
+            behind,
+            &up_remote,
+            name,
+            Vec::new(),
+        ));
+    }
+    // 旧值校验避免竞态覆盖；不用强制 refspec，不能快进的提交不会被写进去。
+    let updated = run_git(
+        &top,
+        &["update-ref", &full, &upstream_sha, &local_sha],
+        Duration::from_secs(8),
+    )?;
+    ensure_ok(&updated, "快进分支")?;
+    Ok(sync_outcome(
+        "ok",
+        format!("已快进分支 {name}"),
+        ahead,
+        behind,
+        &up_remote,
+        name,
         Vec::new(),
     ))
 }
@@ -5321,7 +5485,7 @@ mod tests {
         git_ok(&local_s, &["commit", "-m", "second"]);
         git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
 
-        let preview = preview_push(&local_s, None, None).unwrap();
+        let preview = preview_push(&local_s, None, None, None).unwrap();
         assert_eq!(preview.remote, "origin");
         assert_eq!(preview.target_branch, "main");
         assert!(!preview.target_exists);
@@ -5331,18 +5495,18 @@ mod tests {
         assert_eq!(preview.commits[0].subject, "second");
         assert!(preview.commits[0].files.iter().any(|file| file.path == "b.txt"));
 
-        let custom = preview_push(&local_s, Some("origin"), Some("feature")).unwrap();
+        let custom = preview_push(&local_s, Some("origin"), Some("feature"), None).unwrap();
         assert_eq!(custom.target_branch, "feature");
         assert!(!custom.target_exists);
         assert!(custom.will_set_upstream);
 
-        let pushed = push_to(&local_s, "origin", "feature", true, &mut |_| {}).unwrap();
+        let pushed = push_to(&local_s, "origin", "feature", true, None, &mut |_| {}).unwrap();
         assert_eq!(pushed.status, "ok", "{}", pushed.message);
         assert_eq!(upstream_ref(&local_s).as_deref(), Some("origin/feature"));
         let (branch, _) = current_branch(&local_s).unwrap();
         assert_eq!(branch, "main", "推送到别的远程分支不能改本地分支名");
 
-        let tracked = preview_push(&local_s, None, None).unwrap();
+        let tracked = preview_push(&local_s, None, None, None).unwrap();
         assert_eq!(tracked.remote, "origin");
         assert_eq!(tracked.target_branch, "feature", "已有上游时默认推到上游，而不是强行同名");
         assert!(tracked.target_exists);
@@ -5351,15 +5515,15 @@ mod tests {
         assert!(!tracked.will_set_upstream);
 
         let feature_ref = run_git(&local_s, &["rev-parse", "refs/remotes/origin/feature"], Duration::from_secs(8)).unwrap();
-        assert!(push_to(&local_s, "origin", "bad:name", false, &mut |_| {}).is_err());
-        assert!(push_to(&local_s, "elsewhere", "main", false, &mut |_| {}).is_err());
+        assert!(push_to(&local_s, "origin", "bad:name", false, None, &mut |_| {}).is_err());
+        assert!(push_to(&local_s, "elsewhere", "main", false, None, &mut |_| {}).is_err());
         let feature_after = run_git(&local_s, &["rev-parse", "refs/remotes/origin/feature"], Duration::from_secs(8)).unwrap();
         assert_eq!(lossy(&feature_ref.stdout), lossy(&feature_after.stdout));
 
         fs::write(local.join("c.txt"), "v3\n").unwrap();
         git_ok(&local_s, &["add", "c.txt"]);
         git_ok(&local_s, &["commit", "-m", "third"]);
-        let again = preview_push(&local_s, Some("origin"), Some("feature")).unwrap();
+        let again = preview_push(&local_s, Some("origin"), Some("feature"), None).unwrap();
         assert_eq!(again.ahead, 1);
         assert_eq!(again.commits.len(), 1);
         assert!(again.commits[0].files.iter().any(|file| file.path == "c.txt"));
@@ -5613,6 +5777,144 @@ mod tests {
         let cloned = clone_repo(&origin_s, &parent.to_string_lossy(), "copy", &mut |_| {}).unwrap();
         assert!(Path::new(&cloned).join(".git").exists() || Path::new(&cloned).join(".git").is_file());
         assert!(clone_repo(&origin_s, &parent.to_string_lossy(), "copy", &mut |_| {}).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn sha(repo: &str, rev: &str) -> String {
+        let output = run_git(repo, &["rev-parse", rev], Duration::from_secs(8)).unwrap();
+        assert!(output.status.success(), "{rev} {}", lossy(&output.stderr));
+        lossy(&output.stdout)
+    }
+
+    #[test]
+    fn push_source_uses_selected_branch_not_head() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("snail-git-push-source-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("local");
+        let bare_s = bare.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+        git_ok(&root_s, &["init", "--bare", "-b", "main", &bare_s]);
+        init_repo(&local);
+        fs::write(local.join("a.txt"), "v1\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "init"]);
+        git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
+        git_ok(&local_s, &["checkout", "-b", "feature"]);
+        fs::write(local.join("b.txt"), "v2\n").unwrap();
+        git_ok(&local_s, &["add", "b.txt"]);
+        git_ok(&local_s, &["commit", "-m", "feature-only"]);
+        git_ok(&local_s, &["checkout", "main"]);
+
+        let preview = preview_push(&local_s, None, None, Some("feature")).unwrap();
+        assert_eq!(preview.local_branch, "feature");
+        assert_eq!(preview.target_branch, "feature");
+        assert!(preview.commits.iter().any(|commit| commit.subject == "feature-only"));
+        assert!(!preview.commits.iter().any(|commit| commit.subject == "init") || preview.ahead >= 1);
+
+        let head_only = preview_push(&local_s, None, None, None).unwrap();
+        assert_eq!(head_only.local_branch, "main");
+        assert!(!head_only.commits.iter().any(|commit| commit.subject == "feature-only"));
+
+        let pushed = push_to(&local_s, "origin", "feature", true, Some("feature"), &mut |_| {}).unwrap();
+        assert_eq!(pushed.status, "ok", "{}", pushed.message);
+        let (branch, _) = current_branch(&local_s).unwrap();
+        assert_eq!(branch, "main");
+        let tracked = run_git(
+            &local_s,
+            &["rev-parse", "--abbrev-ref", "feature@{upstream}"],
+            Duration::from_secs(8),
+        )
+        .unwrap();
+        assert_eq!(lossy(&tracked.stdout), "origin/feature");
+        assert!(upstream_ref(&local_s).is_none(), "当前分支上游不应被改写");
+        assert!(preview_push(&local_s, None, None, Some("missing")).is_err());
+        assert!(preview_push(&local_s, None, None, Some("bad:name")).is_err());
+
+        git_ok(&local_s, &["checkout", "--detach"]);
+        let detached = preview_push(&local_s, None, None, Some("feature")).unwrap();
+        assert_eq!(detached.local_branch, "feature");
+        assert!(preview_push(&local_s, None, None, None).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_local_branch_fast_forwards_without_moving_head() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("snail-git-update-local-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("local");
+        let other = root.join("other");
+        let bare_s = bare.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        let other_s = other.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+        git_ok(&root_s, &["init", "--bare", "-b", "main", &bare_s]);
+        init_repo(&local);
+        fs::write(local.join("a.txt"), "v1\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "init"]);
+        git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
+        git_ok(&local_s, &["push", "-u", "origin", "main"]);
+        git_ok(&local_s, &["branch", "feature"]);
+        git_ok(&local_s, &["push", "-u", "origin", "feature"]);
+        git_ok(&root_s, &["clone", &bare_s, &other_s]);
+        git_ok(&other_s, &["config", "user.email", "test@snailgit.local"]);
+        git_ok(&other_s, &["config", "user.name", "SnailGit Test"]);
+        git_ok(&other_s, &["checkout", "feature"]);
+        fs::write(other.join("b.txt"), "remote\n").unwrap();
+        git_ok(&other_s, &["add", "b.txt"]);
+        git_ok(&other_s, &["commit", "-m", "remote-feature"]);
+        git_ok(&other_s, &["push", "origin", "feature"]);
+
+        fs::write(local.join("dirty.txt"), "keep\n").unwrap();
+        let head_before = sha(&local_s, "HEAD");
+        let feature_before = sha(&local_s, "refs/heads/feature");
+        let updated = update_local_branch(&local_s, "feature", &mut |_| {}).unwrap();
+        assert_eq!(updated.status, "ok", "{}", updated.message);
+        assert_ne!(sha(&local_s, "refs/heads/feature"), feature_before);
+        assert_eq!(sha(&local_s, "refs/heads/feature"), sha(&local_s, "refs/remotes/origin/feature"));
+        assert_eq!(sha(&local_s, "HEAD"), head_before);
+        assert_eq!(fs::read_to_string(local.join("dirty.txt")).unwrap(), "keep\n");
+        let (branch, _) = current_branch(&local_s).unwrap();
+        assert_eq!(branch, "main");
+
+        let again = update_local_branch(&local_s, "feature", &mut |_| {}).unwrap();
+        assert_eq!(again.status, "up_to_date", "{}", again.message);
+
+        git_ok(&local_s, &["branch", "lonely"]);
+        let lonely_before = sha(&local_s, "refs/heads/lonely");
+        let no_upstream = update_local_branch(&local_s, "lonely", &mut |_| {}).unwrap();
+        assert_eq!(no_upstream.status, "ok", "{}", no_upstream.message);
+        assert!(no_upstream.message.contains("没有上游"));
+        assert_eq!(sha(&local_s, "refs/heads/lonely"), lonely_before);
+
+        assert!(update_local_branch(&local_s, "main", &mut |_| {}).is_err());
+
+        git_ok(&local_s, &["checkout", "-b", "diverged", "feature"]);
+        fs::write(local.join("local-only.txt"), "x\n").unwrap();
+        git_ok(&local_s, &["add", "local-only.txt"]);
+        git_ok(&local_s, &["commit", "-m", "local-diverge"]);
+        git_ok(&local_s, &["checkout", "main"]);
+        git_ok(&other_s, &["commit", "--allow-empty", "-m", "remote-diverge"]);
+        git_ok(&other_s, &["push", "origin", "feature"]);
+        git_ok(&local_s, &["branch", "--set-upstream-to=origin/feature", "diverged"]);
+        let diverged_before = sha(&local_s, "refs/heads/diverged");
+        let blocked = update_local_branch(&local_s, "diverged", &mut |_| {}).unwrap();
+        assert_eq!(blocked.status, "blocked", "{}", blocked.message);
+        assert_eq!(sha(&local_s, "refs/heads/diverged"), diverged_before);
+        assert_eq!(sha(&local_s, "HEAD"), head_before);
         let _ = fs::remove_dir_all(&root);
     }
 

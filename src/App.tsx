@@ -49,6 +49,7 @@ import {
   processMemoryMb,
   pushTo,
   rebaseOnto,
+  updateLocalBranch,
   removeSavedRepo,
   renameBranch,
   resetTo,
@@ -149,6 +150,7 @@ export function App() {
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const [pushOpen, setPushOpen] = useState(false);
+  const [pushSource, setPushSource] = useState<string | undefined>();
   const [pushError, setPushError] = useState('');
   const [pushRefreshKey, setPushRefreshKey] = useState(0);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -302,21 +304,37 @@ export function App() {
     });
   }, [guardNetwork, refresh]);
 
-  const handlePush = useCallback(() => {
+  const openPush = useCallback((source?: string) => {
     if (!isTauriEnvironment() || !activeRepo) {
       showToast(t('toast.previewNoWrite'), true);
       return;
     }
     setPushError('');
+    setPushSource(source);
     setPushRefreshKey(key => key + 1);
     setPushOpen(true);
   }, [activeRepo, t]);
+
+  const handlePush = useCallback(() => {
+    openPush();
+  }, [openPush]);
+
+  const handleUpdateBranch = useCallback((name: string) => {
+    if (name === currentBranch) {
+      handleUpdate();
+      return;
+    }
+    void guardNetwork('update', async (repoPath) => {
+      const outcome = await updateLocalBranch(repoPath, name);
+      await finishNetwork(repoPath, outcome);
+    });
+  }, [currentBranch, handleUpdate, guardNetwork, refresh]);
 
   const confirmPush = useCallback((target: PushTarget) => {
     setPushError('');
     void guardNetwork('push', async (repoPath) => {
       try {
-        const outcome = await pushTo(repoPath, target.remote, target.branch, target.setUpstream);
+        const outcome = await pushTo(repoPath, target.remote, target.branch, target.setUpstream, target.source);
         if (outcome.status === 'ok' || outcome.status === 'up_to_date') {
           setPushOpen(false);
           await finishNetwork(repoPath, outcome);
@@ -872,6 +890,9 @@ export function App() {
                 const name = prompt(t('toast.branchPrompt'), 'feature/');
                 if (name) void run(t('toast.branchCreated'), () => createBranch(activeRepo.path, name, hash));
               }}
+              onUpdateBranch={handleUpdateBranch}
+              onPushBranch={openPush}
+              onRenameBranch={(oldName, newName) => run(t('toast.renamed'), () => renameBranch(activeRepo.path, oldName, newName))}
             />
           )}
 
@@ -1086,6 +1107,7 @@ export function App() {
         open={pushOpen && Boolean(activeRepo)}
         repoPath={activeRepo?.path || ''}
         refreshKey={pushRefreshKey}
+        sourceBranch={pushSource}
         busy={opsLocked && syncAction === 'push'}
         error={pushError}
         onClose={() => {
