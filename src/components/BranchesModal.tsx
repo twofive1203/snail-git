@@ -12,7 +12,6 @@ import {
   Layers, 
   Star, 
   X,
-  ExternalLink,
   ChevronRight
 } from 'lucide-react';
 import { useI18n } from '../i18n/react';

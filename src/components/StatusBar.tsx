@@ -1,5 +1,5 @@
 import React from 'react';
-import { GitBranch, HardDrive, CheckCircle2, Zap } from 'lucide-react';
+import { GitBranch, CheckCircle2, Zap } from 'lucide-react';
 import { useI18n } from '../i18n/react';
 
 interface StatusBarProps {

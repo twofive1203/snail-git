@@ -1,0 +1,12 @@
+dist/
+node_modules/
+backups/
+docs/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/icons/
+.pnpm-store/
+.pnpm-cache/
+.pnpm-state/
+pnpm-lock.yaml
+*.md

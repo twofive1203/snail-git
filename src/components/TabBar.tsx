@@ -4,10 +4,7 @@ import {
   CheckSquare, 
   GitFork, 
   Archive, 
-  GitMerge, 
-  HelpCircle,
-  Monitor,
-  Globe
+  GitMerge
 } from 'lucide-react';
 import { isTauriEnvironment } from '../services/gitService';
 import { useI18n } from '../i18n/react';

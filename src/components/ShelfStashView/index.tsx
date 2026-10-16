@@ -7,8 +7,6 @@ import {
   Clock, 
   FileText, 
   Trash2, 
-  RotateCcw, 
-  CheckCircle, 
   HelpCircle,
   FileDiff,
   Download

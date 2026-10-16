@@ -16,7 +16,6 @@ interface CommitViewProps {
   onDeleteUnversioned?: (file: FileChange) => void;
   onToggleFileStage: (file: FileChange, staged: boolean) => void;
   onBatchToggleStage: (files: FileChange[], staged: boolean) => void;
-  onToggleAllStage: (staged: boolean) => void;
   onToggleChunkStage: (file: FileChange, chunkId: string) => void;
   onRevertChunk: (file: FileChange, chunkId: string) => void;
   onRollbackFile: (file: FileChange) => void;
@@ -40,7 +39,6 @@ export const CommitView: React.FC<CommitViewProps> = ({
   onDeleteUnversioned,
   onToggleFileStage,
   onBatchToggleStage,
-  onToggleAllStage,
   onToggleChunkStage,
   onRevertChunk,
   onRollbackFile,
@@ -100,8 +98,6 @@ export const CommitView: React.FC<CommitViewProps> = ({
         onBatchToggleStage={(fileIds, targetStaged) => {
           onBatchToggleStage(changes.filter(c => fileIds.includes(c.id)), targetStaged);
         }}
-        onToggleAllStage={onToggleAllStage}
-        onShelveSelected={onShelve}
         onRollbackSelected={() => {
           if (selectedFile) onRollbackFile(selectedFile);
         }}

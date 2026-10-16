@@ -8,10 +8,8 @@ import {
   RotateCcw, 
   RefreshCw, 
   Eye, 
-  ChevronsUpDown, 
   Maximize2, 
   Minimize2, 
-  Layers, 
   FileCode,
   Check,
   Minus
@@ -24,8 +22,6 @@ interface ChangelistTreeProps {
   onSelectFile: (file: FileChange) => void;
   onToggleFileStage: (fileId: string) => void;
   onBatchToggleStage?: (fileIds: string[], targetStaged: boolean) => void;
-  onToggleAllStage: (stage: boolean) => void;
-  onShelveSelected: () => void;
   onRollbackSelected: () => void;
   onRefresh?: () => void;
   onAddToGitignore?: (path: string) => void;
@@ -51,8 +47,6 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   onSelectFile,
   onToggleFileStage,
   onBatchToggleStage,
-  onToggleAllStage,
-  onShelveSelected,
   onRollbackSelected,
   onRefresh,
   onAddToGitignore,
@@ -123,7 +117,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   const untrackedFiles = visibleChanges.filter(c => c.status === 'untracked');
 
   // 构建树形结构并执行紧凑折叠算法
-  const buildTree = (fileList: FileChange[], rootKey: string): TreeNode[] => {
+  const buildTree = (fileList: FileChange[]): TreeNode[] => {
     interface RawNode {
       name: string;
       fullPath: string;
@@ -178,7 +172,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
       }
 
       // 递归计算文件总数
-      let totalFiles = 0;
+      let totalFiles: number;
       if (!node.isFolder) {
         totalFiles = 1;
       } else {
@@ -200,8 +194,8 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     return Array.from(rootMap.values()).map(convert);
   };
 
-  const trackedTree = useMemo(() => buildTree(trackedFiles, 'tracked'), [trackedFiles, compactMiddleFolders]);
-  const untrackedTree = useMemo(() => buildTree(untrackedFiles, 'untracked'), [untrackedFiles, compactMiddleFolders]);
+  const trackedTree = useMemo(() => buildTree(trackedFiles), [trackedFiles, compactMiddleFolders]);
+  const untrackedTree = useMemo(() => buildTree(untrackedFiles), [untrackedFiles, compactMiddleFolders]);
 
   const findNode = (nodes: TreeNode[], key: string): TreeNode | null => {
     for (const node of nodes) {

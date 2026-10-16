@@ -1,4 +1,4 @@
-import { GitCommit, GitBranch, GitTag, FileChange, ShelfItem, StashItem, FileChangeStatus, DiffChunk, DiffLine, GitRepository } from '../types/git';
+import { GitCommit, GitBranch, GitTag, FileChange, ShelfItem, StashItem, FileChangeStatus, GitRepository } from '../types/git';
 
 export const mockRepositories: GitRepository[] = [
   {

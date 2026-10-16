@@ -8,16 +8,13 @@ import {
   Star, 
   GitBranch as BranchIcon, 
   Check, 
-  ChevronRight,
   ExternalLink,
   Copy,
-  Layers,
   Archive,
   PanelLeftClose,
   PanelLeft,
   X,
-  GitMerge,
-  GitPullRequest
+  GitMerge
 } from 'lucide-react';
 import { AddProjectModal } from './AddProjectModal';
 import { useI18n } from '../../i18n/react';
@@ -69,9 +66,6 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onSelectBranch,
   onCreateBranch,
   onMergeBranch,
-  onRebaseBranch,
-  onDeleteBranch,
-  onRenameBranch,
   onToggleFavoriteBranch,
   shelves = [],
   stashes = [],
@@ -87,7 +81,6 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const [repoSearchQuery, setRepoSearchQuery] = useState('');
   const [branchSearchQuery, setBranchSearchQuery] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [selectedBranchAction, setSelectedBranchAction] = useState<GitBranch | null>(null);
 
   // 切换活动栏 Tab
   const handleTabClick = (tab: SidebarTab) => {
