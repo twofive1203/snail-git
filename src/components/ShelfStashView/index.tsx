@@ -11,6 +11,7 @@ import {
   FileDiff,
   Download
 } from 'lucide-react';
+import { askConfirm } from '../common/askConfirm';
 import { useI18n } from '../../i18n/react';
 
 interface ShelfStashViewProps {
@@ -59,16 +60,31 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
 
   const handleDeleteShelf = (id: string) => {
     const shelf = shelves.find(item => item.id === id);
-    if (!confirm(t('shelf.cleanupConfirm', { name: shelf?.name || id }))) return;
-    if (onDeleteShelf) onDeleteShelf(id);
-    else setShelves(prev => prev.filter(s => s.id !== id));
+    const name = shelf?.name || id;
+    void askConfirm({
+      title: t('confirm.cleanupShelfTitle'),
+      message: t('shelf.cleanupConfirm', { name }),
+      confirmLabel: t('confirm.cleanup'),
+      tone: 'danger',
+    }).then(ok => {
+      if (!ok) return;
+      if (onDeleteShelf) onDeleteShelf(id);
+      else setShelves(prev => prev.filter(s => s.id !== id));
+    });
   };
 
   const handleDeleteStash = (stash: StashItem) => {
     const name = stash.message || `stash@{${stash.index}}`;
-    if (!confirm(t('shelf.dropConfirm', { name }))) return;
-    if (onDropStash) onDropStash(stash);
-    else setStashes(prev => prev.filter(s => s.id !== stash.id));
+    void askConfirm({
+      title: t('confirm.dropStashTitle'),
+      message: t('shelf.dropConfirm', { name }),
+      confirmLabel: t('confirm.drop'),
+      tone: 'danger',
+    }).then(ok => {
+      if (!ok) return;
+      if (onDropStash) onDropStash(stash);
+      else setStashes(prev => prev.filter(s => s.id !== stash.id));
+    });
   };
 
   return (

@@ -14,6 +14,7 @@ import {
   Check,
   Minus
 } from 'lucide-react';
+import { askConfirm } from '../common/askConfirm';
 import { useI18n } from '../../i18n/react';
 
 interface ChangelistTreeProps {
@@ -765,9 +766,15 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                 const file = contextMenu.file;
                 setContextMenu(null);
                 if (!file) return;
-                if (confirm(t('changes.deleteConfirm', { path: file.path }))) {
-                  onDeleteUnversioned?.(file);
-                }
+                void askConfirm({
+                  title: t('confirm.deleteFileTitle'),
+                  message: t('changes.deleteConfirm', { path: file.path }),
+                  confirmLabel: t('common.delete'),
+                  tone: 'danger',
+                  files: [file.path],
+                }).then(ok => {
+                  if (ok) onDeleteUnversioned?.(file);
+                });
               }}
               className="w-full text-left px-3 py-1.5 hover:bg-[#2E436E] text-[#E35967]"
             >

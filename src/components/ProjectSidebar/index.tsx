@@ -17,6 +17,7 @@ import {
   GitMerge
 } from 'lucide-react';
 import { AddProjectModal } from './AddProjectModal';
+import { askConfirm } from '../common/askConfirm';
 import { useI18n } from '../../i18n/react';
 
 export type SidebarTab = 'repos' | 'branches' | 'shelf';
@@ -293,9 +294,14 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (confirm(t('project.removeConfirm', { name: repo.name }))) {
-                                  onRemoveRepo(repo.id);
-                                }
+                                const repoId = repo.id;
+                                void askConfirm({
+                                  title: t('confirm.removeRepoTitle'),
+                                  message: t('project.removeConfirm', { name: repo.name }),
+                                  confirmLabel: t('confirm.remove'),
+                                }).then(ok => {
+                                  if (ok) onRemoveRepo(repoId);
+                                });
                               }}
                               title={t('project.remove')}
                               className="p-1 rounded hover:bg-[#35373C] text-[#8C9099] hover:text-rose-400"
@@ -426,9 +432,15 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (confirm(t('project.mergeConfirm', { name: b.name, current: currentBranch }))) {
-                                    onMergeBranch?.(b.name);
-                                  }
+                                  const branchName = b.name;
+                                  void askConfirm({
+                                    title: t('confirm.mergeTitle'),
+                                    message: t('project.mergeConfirm', { name: branchName, current: currentBranch }),
+                                    confirmLabel: t('confirm.merge'),
+                                    tone: 'primary',
+                                  }).then(ok => {
+                                    if (ok) onMergeBranch?.(branchName);
+                                  });
                                 }}
                                 className="p-0.5 text-[#8C9099] hover:text-[#DFE1E5]"
                                 title={t('project.mergeInto')}
@@ -570,8 +582,15 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                                 <button
                                   onClick={() => {
                                     const name = st.message || `stash@{${st.index}}`;
-                                    if (!confirm(t('shelf.dropConfirm', { name }))) return;
-                                    onDropStash?.(st);
+                                    const stash = st;
+                                    void askConfirm({
+                                      title: t('confirm.dropStashTitle'),
+                                      message: t('shelf.dropConfirm', { name }),
+                                      confirmLabel: t('confirm.drop'),
+                                      tone: 'danger',
+                                    }).then(ok => {
+                                      if (ok) onDropStash?.(stash);
+                                    });
                                   }}
                                   className="text-rose-400 hover:underline"
                                   title={t('project.dropStash')}

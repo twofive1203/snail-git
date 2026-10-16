@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Check, Cloud, Copy, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { GitRemote, RemoteList } from '../types/git';
 import { addRemote, listRemotes, removeRemote, renameRemote, setRemoteUrl } from '../services/gitService';
+import { askConfirm } from './common/askConfirm';
 import { useI18n } from '../i18n/react';
 
 interface RemotesModalProps {
@@ -105,7 +106,13 @@ export const RemotesModal: React.FC<RemotesModalProps> = ({
   };
 
   const remove = async (name: string) => {
-    if (saving || !confirm(t('remotes.removeConfirm', { name }))) return;
+    if (saving) return;
+    const ok = await askConfirm({
+      title: t('confirm.removeRemoteTitle'),
+      message: t('remotes.removeConfirm', { name }),
+      confirmLabel: t('confirm.remove'),
+    });
+    if (!ok) return;
     setSaving(true);
     setError('');
     try {

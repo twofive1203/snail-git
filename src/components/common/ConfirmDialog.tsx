@@ -33,6 +33,13 @@ const toneClass = (tone: ConfirmAction['tone']) => {
   return 'bg-jb-panel hover:bg-jb-hover text-jb-text-primary border-jb-border';
 };
 
+const actionIcon = (action: ConfirmAction) => {
+  if (action.icon) return action.icon;
+  if (action.tone === 'primary') return <ArrowRight className="w-3.5 h-3.5" />;
+  if (action.tone === 'danger') return <AlertTriangle className="w-3.5 h-3.5" />;
+  return <Info className="w-3.5 h-3.5" />;
+};
+
 /** 项目风格的确认弹窗，替代 window.confirm —— 支持多选项、文件清单与执行中状态。 */
 export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   open,
@@ -57,13 +64,15 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
+        event.stopPropagation();
         onCancel();
       }
     };
-    window.addEventListener('keydown', onKey);
+    // 捕获阶段先于 App 的全局快捷键，避免 Esc 同时关掉下层菜单。
+    window.addEventListener('keydown', onKey, true);
     return () => {
       window.clearTimeout(id);
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
     };
   }, [open, busy, onCancel]);
 
@@ -75,7 +84,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-[1px] p-6 select-none"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 backdrop-blur-[1px] p-6 select-none"
       onMouseDown={(event) => {
         if (busy) return;
         if (cardRef.current && !cardRef.current.contains(event.target as Node)) onCancel();
@@ -138,6 +147,13 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         </div>
 
         <div className="px-4 py-3 border-t border-jb-border bg-jb-bg/40 flex items-center justify-end space-x-2 flex-wrap gap-y-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="px-3 py-1.5 rounded border border-jb-border bg-transparent text-jb-text-secondary hover:bg-jb-hover hover:text-jb-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {t('common.cancel')}
+          </button>
           {actions.map((action, index) => (
             <button
               key={action.value}
@@ -146,17 +162,10 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
               disabled={busy}
               className={`px-3 py-1.5 rounded border flex items-center space-x-1.5 font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${toneClass(action.tone)}`}
             >
-              {action.icon ?? (action.tone === 'primary' ? <ArrowRight className="w-3.5 h-3.5" /> : <Info className="w-3.5 h-3.5" />)}
+              {actionIcon(action)}
               <span>{action.label}</span>
             </button>
           ))}
-          <button
-            onClick={onCancel}
-            disabled={busy}
-            className="px-3 py-1.5 rounded border border-jb-border bg-transparent text-jb-text-secondary hover:bg-jb-hover hover:text-jb-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {t('common.cancel')}
-          </button>
         </div>
       </div>
     </div>

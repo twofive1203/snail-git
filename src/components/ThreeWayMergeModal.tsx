@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { GitMerge, Save, X } from 'lucide-react';
 import { FilePathDisplay } from './common/FilePathDisplay';
 import { MergeViewer, type MergeViewerHandle, type MergeViewerStats } from './merge/MergeViewer';
+import { askConfirm } from './common/askConfirm';
 import { useI18n } from '../i18n/react';
 
 export interface ConflictFileRef {
@@ -49,8 +50,18 @@ export const ThreeWayMergeModal: React.FC<ThreeWayMergeModalProps> = ({
 
   const selectFile = (path: string) => {
     if (path === activePath) return;
-    if (dirtyRef.current && !confirm(t('merge.switchConfirm'))) return;
-    onSelectFile(path);
+    if (!dirtyRef.current) {
+      onSelectFile(path);
+      return;
+    }
+    void askConfirm({
+      title: t('confirm.switchFileTitle'),
+      message: t('merge.switchConfirm'),
+      confirmLabel: t('confirm.continue'),
+      tone: 'danger',
+    }).then(ok => {
+      if (ok) onSelectFile(path);
+    });
   };
 
   const body = (

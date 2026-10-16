@@ -74,6 +74,8 @@ import {
   type SyncOutcome,
   type UpdateResponse,
 } from './services/gitService';
+import { askConfirm, isAskConfirmOpen } from './components/common/askConfirm';
+import { ConfirmHost } from './components/common/ConfirmHost';
 import { ConfirmDialog, type ConfirmAction } from './components/common/ConfirmDialog';
 import type { MessageKey } from './i18n';
 import { useI18n } from './i18n/react';
@@ -583,9 +585,18 @@ export function App() {
 
   const handleRevertChunk = (file: FileChange, chunkId: string) => {
     const chunk = file.chunks.find(c => c.id === chunkId);
-    if (!chunk?.rawPatch) return;
-    if (!confirm(t('toast.chunkDiscardConfirm'))) return;
-    void run(t('toast.chunkRolledBack'), () => applyChunk(activeRepo.path, chunk.rawPatch!, 'rollback'));
+    if (!chunk?.rawPatch || !activeRepo) return;
+    const repoPath = activeRepo.path;
+    const patch = chunk.rawPatch;
+    void askConfirm({
+      title: t('confirm.discardChunkTitle'),
+      message: t('toast.chunkDiscardConfirm'),
+      confirmLabel: t('confirm.discard'),
+      tone: 'danger',
+    }).then(ok => {
+      if (!ok) return;
+      void run(t('toast.chunkRolledBack'), () => applyChunk(repoPath, patch, 'rollback'));
+    });
   };
 
   const requestDiff = useCallback((file: FileChange) => {
@@ -651,7 +662,13 @@ export function App() {
       const warning = branch.isRemote
         ? t('toast.deleteRemoteBranch', { name: branch.name })
         : t('toast.deleteLocalBranch', { name: branch.name });
-      if (!confirm(warning)) return;
+      const ok = await askConfirm({
+        title: t('confirm.deleteBranchTitle'),
+        message: warning,
+        confirmLabel: t('common.delete'),
+        tone: 'danger',
+      });
+      if (!ok) return;
     }
     try {
       const text = await deleteBranch(activeRepo.path, branch.name, Boolean(branch.isRemote), force);
@@ -660,9 +677,13 @@ export function App() {
     } catch (err) {
       const message = String(err);
       if (!force && !branch.isRemote && /not fully merged|not merged/i.test(message)) {
-        if (confirm(t('toast.forceDeleteBranch'))) {
-          await handleDeleteBranch(branch, true);
-        }
+        const forceDelete = await askConfirm({
+          title: t('confirm.forceDeleteTitle'),
+          message: t('toast.forceDeleteBranch'),
+          confirmLabel: t('confirm.forceDelete'),
+          tone: 'danger',
+        });
+        if (forceDelete) await handleDeleteBranch(branch, true);
         return;
       }
       showToast(message, true);
@@ -753,6 +774,7 @@ export function App() {
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
     };
     const onKey = (e: KeyboardEvent) => {
+      if (isAskConfirmOpen() || pendingConfirm) return;
       const overlayOpen = Boolean(shelveDraft) || stashDraft !== null || Boolean(diffTitle) || pushOpen || isAddRepoOpen || isBranchesOpen || isRemotesOpen;
       if (e.key === 'Escape') {
         if (shelveDraft) setShelveDraft(null);
@@ -790,7 +812,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [handlePush, handleUpdate, focusList, shelveDraft, stashDraft, diffTitle, pushOpen, isAddRepoOpen, isBranchesOpen, isRemotesOpen, opsLocked]);
+  }, [handlePush, handleUpdate, focusList, shelveDraft, stashDraft, diffTitle, pushOpen, isAddRepoOpen, isBranchesOpen, isRemotesOpen, opsLocked, pendingConfirm]);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
@@ -833,9 +855,17 @@ export function App() {
             showToast(t('toast.nothingToRollback'), true);
             return;
           }
-          if (confirm(t('toast.rollbackAllConfirm', { count: changes.length }))) {
-            void run(t('toast.rolledBack'), () => discardPaths(activeRepo.path, changes.map(file => file.path)));
-          }
+          const repoPath = activeRepo.path;
+          const paths = changes.map(file => file.path);
+          void askConfirm({
+            title: t('confirm.rollbackAllTitle'),
+            message: t('toast.rollbackAllConfirm', { count: paths.length }),
+            confirmLabel: t('confirm.rollback'),
+            tone: 'danger',
+            files: paths,
+          }).then(ok => {
+            if (ok) void run(t('toast.rolledBack'), () => discardPaths(repoPath, paths));
+          });
         }}
         onShelfClick={() => setActiveTab('shelf')}
         aheadCount={aheadCount}
@@ -948,9 +978,16 @@ export function App() {
               onToggleChunkStage={handleChunk}
               onRevertChunk={handleRevertChunk}
               onRollbackFile={(file) => {
-                if (confirm(t('toast.rollbackFileConfirm', { path: file.path }))) {
-                  void run(t('toast.fileRolledBack'), () => discardPaths(activeRepo.path, [file.path]));
-                }
+                const repoPath = activeRepo.path;
+                void askConfirm({
+                  title: t('confirm.rollbackFileTitle'),
+                  message: t('toast.rollbackFileConfirm', { path: file.path }),
+                  confirmLabel: t('confirm.rollback'),
+                  tone: 'danger',
+                  files: [file.path],
+                }).then(ok => {
+                  if (ok) void run(t('toast.fileRolledBack'), () => discardPaths(repoPath, [file.path]));
+                });
               }}
               onRefresh={() => void refresh()}
               onRequestDiff={requestDiff}
@@ -1197,6 +1234,7 @@ export function App() {
         onChoose={chooseConfirm}
         onCancel={cancelConfirm}
       />
+      <ConfirmHost />
     </div>
   );
 }

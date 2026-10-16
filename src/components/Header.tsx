@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { GitRepository } from '../types/git';
 import { WindowControls } from './WindowControls';
+import { askConfirm } from './common/askConfirm';
 import { useI18n } from '../i18n/react';
 
 export type SyncAction = 'update' | 'push' | 'fetch';
@@ -253,9 +254,14 @@ export const Header: React.FC<HeaderProps> = ({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (confirm(t('header.removeConfirm', { name: repo.name }))) {
-                                onRemoveRepo?.(repo.id);
-                              }
+                              const repoId = repo.id;
+                              void askConfirm({
+                                title: t('confirm.removeRepoTitle'),
+                                message: t('header.removeConfirm', { name: repo.name }),
+                                confirmLabel: t('confirm.remove'),
+                              }).then(ok => {
+                                if (ok) onRemoveRepo?.(repoId);
+                              });
                             }}
                             title={t('header.remove')}
                             className="p-0.5 hover:text-rose-400 text-[#8C9099]"

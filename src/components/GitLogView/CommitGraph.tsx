@@ -12,6 +12,7 @@ import {
   FileDiff,
   Combine,
 } from 'lucide-react';
+import { askConfirm } from '../common/askConfirm';
 import { useI18n } from '../../i18n/react';
 import { inspectSquashSelection, type SquashIssue } from './squashSelection';
 import {
@@ -712,10 +713,17 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
 
           <button
             onClick={() => {
-              if (confirm(t('graph.resetConfirm', { hash: contextMenu.commit!.shortHash }))) {
-                onReset?.(contextMenu.commit!.hash);
-              }
+              const commit = contextMenu.commit;
               setContextMenu(prev => ({ ...prev, visible: false }));
+              if (!commit) return;
+              void askConfirm({
+                title: t('confirm.resetTitle'),
+                message: t('graph.resetConfirm', { hash: commit.shortHash }),
+                confirmLabel: t('confirm.reset'),
+                tone: 'danger',
+              }).then(ok => {
+                if (ok) onReset?.(commit.hash);
+              });
             }}
             className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2 text-rose-300"
           >
