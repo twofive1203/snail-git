@@ -837,8 +837,9 @@ fn safe_rel(path: &str) -> Result<String, String> {
 
 fn filename_of(path: &str) -> String {
     path.replace('\\', "/")
-        .rsplit('/')
-        .next()
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .next_back()
         .unwrap_or(path)
         .to_string()
 }
@@ -868,7 +869,8 @@ pub fn status_files(repo: &str) -> Result<Vec<FileChangeDto>, String> {
             "status",
             "--porcelain=v1",
             "-z",
-            "--untracked-files=normal",
+            // normal 会把整个未跟踪目录收成 `docs/`。树按斜杠切开后文件名是空串，差异也读不到目录里的文件。
+            "--untracked-files=all",
         ],
         Duration::from_secs(20),
     )?;
@@ -933,7 +935,8 @@ pub fn poll_signature(repo: &str) -> Option<String> {
         &[
             "status",
             "--porcelain=v1",
-            "--untracked-files=normal",
+            // 与 status_files 保持一致：否则已经显示为 `docs/` 的目录里新增文件时，签名不变，界面不会刷新。
+            "--untracked-files=all",
             "--ignore-submodules=dirty",
         ],
         Duration::from_secs(8),
@@ -2627,7 +2630,8 @@ struct DirtyPaths {
 fn dirty_paths(repo: &str) -> Result<DirtyPaths, String> {
     let output = run_git(
         repo,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+        // 要和远程文件逐条比较。`docs/` 对不上 `docs/a.md`，未跟踪文件会漏掉覆盖提示。
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
         Duration::from_secs(20),
     )?;
     if !output.status.success() {
@@ -5679,6 +5683,38 @@ mod tests {
         let _ = run_git(&path, &["config", "user.name", "SnailGit Test"], Duration::from_secs(5));
         fs::write(dir.join("a.txt"), "hello\n").unwrap();
         dir
+    }
+
+    #[test]
+    fn status_lists_files_inside_untracked_directories() {
+        let dir = std::env::temp_dir().join(format!("snail-git-untracked-dir-{}", std::process::id()));
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        let init = run_git(&path, &["init", "-b", "main"], Duration::from_secs(10)).unwrap();
+        assert!(init.status.success(), "{}", lossy(&init.stderr));
+        let _ = run_git(&path, &["config", "user.email", "test@snailgit.local"], Duration::from_secs(5));
+        let _ = run_git(&path, &["config", "user.name", "SnailGit Test"], Duration::from_secs(5));
+        fs::write(dir.join("tracked.txt"), "tracked\n").unwrap();
+        let added = run_git(&path, &["add", "tracked.txt"], Duration::from_secs(8)).unwrap();
+        assert!(added.status.success(), "{}", lossy(&added.stderr));
+        let committed = run_git(&path, &["commit", "-m", "init"], Duration::from_secs(10)).unwrap();
+        assert!(committed.status.success(), "{}", lossy(&committed.stderr));
+
+        fs::create_dir_all(dir.join("docs")).unwrap();
+        fs::write(dir.join("docs").join("p0-development-plan.md"), "# plan\n").unwrap();
+
+        let files = status_files(&path).unwrap();
+        let plan = files.iter().find(|file| file.path.replace('\\', "/").ends_with("docs/p0-development-plan.md"));
+        let plan = plan.expect("untracked file inside a new directory must be listed");
+        assert_eq!(plan.status, "untracked");
+        assert_eq!(plan.filename, "p0-development-plan.md");
+        assert!(!files.iter().any(|file| file.filename.is_empty()), "directory entries must not become nameless files");
+        let diff = file_diff_opts(&path, "docs/p0-development-plan.md", false).unwrap();
+        assert!(diff.iter().any(|chunk| chunk.lines.iter().any(|line| line.new_content.as_deref() == Some("# plan"))));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

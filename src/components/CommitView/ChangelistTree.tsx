@@ -131,7 +131,9 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     const rootMap = new Map<string, RawNode>();
 
     fileList.forEach(file => {
-      const parts = file.path.split(/[/\\]/);
+      // 忽略末尾斜杠产生的空段，避免未跟踪目录被画成没有名字的文件。
+      const parts = file.path.split(/[/\\]/).filter(part => part.length > 0);
+      if (parts.length === 0) return;
       let currentMap = rootMap;
       let pathAccum = '';
 
