@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Header } from './components/Header';
 import { ActiveTab } from './components/TabBar';
 import { GitLogView } from './components/GitLogView';
@@ -15,7 +15,7 @@ import { StashDialog } from './components/ShelfStashView/StashDialog';
 import { AddProjectModal, type CloneRequest } from './components/ProjectSidebar/AddProjectModal';
 import { RemotesModal } from './components/RemotesModal';
 import { PushDialog } from './components/PushDialog';
-import { DiffChunk, FileChange, GitRepository, GitTag, RevisionFile, StashItem } from './types/git';
+import { DiffChunk, FileChange, GitBranch, GitCommit, GitRepository, GitTag, RevisionFile, ShelfItem, StashItem } from './types/git';
 import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive } from 'lucide-react';
 import {
   addSavedRepo,
@@ -52,6 +52,7 @@ import {
   removeSavedRepo,
   renameBranch,
   resetTo,
+  squashCommits,
   resolveConflict,
   revealPath,
   revertCommit,
@@ -72,15 +73,6 @@ import {
   type SyncOutcome,
   type UpdateResponse,
 } from './services/gitService';
-import {
-  mockBranches,
-  mockCommits,
-  mockCurrentChanges,
-  mockRepositories,
-  mockShelves,
-  mockStashes,
-  mockTags,
-} from './mock/gitData';
 import { ConfirmDialog, type ConfirmAction } from './components/common/ConfirmDialog';
 import type { MessageKey } from './i18n';
 import { useI18n } from './i18n/react';
@@ -106,7 +98,7 @@ const confirmActions = (
 export function App() {
   const { t } = useI18n();
   const [native, setNative] = useState(() => isTauriEnvironment());
-  const [repositories, setRepositories] = useState<GitRepository[]>(() => isTauriEnvironment() ? [] : mockRepositories);
+  const [repositories, setRepositories] = useState<GitRepository[]>([]);
   const [activeRepoId, setActiveRepoId] = useState<string>(() => isTauriEnvironment() ? '' : 'repo-1');
   const activeRepo = repositories.find(r => r.id === activeRepoId) || repositories[0];
 
@@ -120,13 +112,13 @@ export function App() {
   const [stashDraft, setStashDraft] = useState<number | null>(null);
   const [stashFocus, setStashFocus] = useState(0);
   const [gitVersion, setGitVersion] = useState('Git');
-  const [branches, setBranches] = useState(native ? [] : mockBranches);
-  const [tags, setTags] = useState<GitTag[]>(native ? [] : mockTags);
-  const [commits, setCommits] = useState(native ? [] : mockCommits);
+  const [branches, setBranches] = useState<GitBranch[]>([]);
+  const [tags, setTags] = useState<GitTag[]>([]);
+  const [commits, setCommits] = useState<GitCommit[]>([]);
   const [commitsHasMore, setCommitsHasMore] = useState(false);
-  const [changes, setChanges] = useState<FileChange[]>(native ? [] : mockCurrentChanges);
-  const [shelves, setShelves] = useState(native ? [] : mockShelves);
-  const [stashes, setStashes] = useState(native ? [] : mockStashes);
+  const [changes, setChanges] = useState<FileChange[]>([]);
+  const [shelves, setShelves] = useState<ShelfItem[]>([]);
+  const [stashes, setStashes] = useState<StashItem[]>([]);
   const [loading, setLoading] = useState(false);
 
   const [isBranchesOpen, setIsBranchesOpen] = useState(false);
@@ -163,6 +155,32 @@ export function App() {
     setToast({ text, error });
     setTimeout(() => setToast(null), error ? 5000 : 2800);
   };
+
+  // 浏览器预览模式（非 Tauri）下才需要假数据，动态导入可让它不进入正式产物
+  const mockChangesRef = useRef<FileChange[]>([]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || isTauriEnvironment()) return;
+    let alive = true;
+    void import('./mock/gitData')
+      .then(mock => {
+        if (!alive) return;
+        mockChangesRef.current = mock.mockCurrentChanges;
+        setRepositories(mock.mockRepositories);
+        setActiveRepoId(mock.mockRepositories[0]?.id ?? '');
+        setCurrentBranch(mock.mockRepositories[0]?.currentBranch ?? 'main');
+        setBranches(mock.mockBranches);
+        setTags(mock.mockTags);
+        setCommits(mock.mockCommits);
+        setChanges(mock.mockCurrentChanges);
+        setShelves(mock.mockShelves);
+        setStashes(mock.mockStashes);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const applySnapshot = useCallback(async (repoPath: string) => {
     const snap = await loadRepoSnapshot(repoPath);
@@ -466,9 +484,10 @@ export function App() {
     setActiveRepoId(repo.id);
     setCurrentBranch(repo.currentBranch);
     if (!isTauriEnvironment()) {
+      const preview = mockChangesRef.current;
       if (repo.id === 'repo-3') setChanges([]);
-      else if (repo.id === 'repo-2') setChanges(mockCurrentChanges.slice(0, 5));
-      else setChanges(mockCurrentChanges);
+      else if (repo.id === 'repo-2') setChanges(preview.slice(0, 5));
+      else setChanges(preview);
       showToast(t('toast.switchedProject', { name: repo.name }));
     }
   };
@@ -860,6 +879,7 @@ export function App() {
               onCherryPick={(hash) => void run(t('toast.cherryPicked'), () => cherryPick(activeRepo.path, hash))}
               onRevert={(hash) => void run(t('toast.reverted'), () => revertCommit(activeRepo.path, hash))}
               onReset={(hash) => void run(t('toast.reset'), () => resetTo(activeRepo.path, hash))}
+              onSquash={(hashes, message) => run(t('toast.squashed'), () => squashCommits(activeRepo.path, hashes, message))}
               currentBranch={currentBranch}
               currentUser={currentUser}
               branches={branches}
@@ -904,7 +924,6 @@ export function App() {
               onStash={openStash}
               onToggleFileStage={handleToggleFile}
               onBatchToggleStage={handleBatch}
-              onToggleAllStage={(staged) => handleBatch(changes, staged)}
               onToggleChunkStage={handleChunk}
               onRevertChunk={handleRevertChunk}
               onRollbackFile={(file) => {

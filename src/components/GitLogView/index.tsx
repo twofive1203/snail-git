@@ -5,6 +5,7 @@ import { FilterBar } from './FilterBar';
 import { CommitGraph } from './CommitGraph';
 import { CommitDetail } from './CommitDetail';
 import { BranchPanel } from './BranchPanel';
+import { SquashDialog } from './SquashDialog';
 import { isTauriEnvironment, loadCommitFiles, loadCommitLog } from '../../services/gitService';
 import { useI18n } from '../../i18n/react';
 
@@ -21,6 +22,7 @@ interface GitLogViewProps {
   onReset?: (hash: string) => void;
   onCreateBranch?: (hash: string) => void;
   onCompareBranch?: (name: string) => void;
+  onSquash?: (hashes: string[], message: string) => Promise<boolean>;
   onCheckoutBranch?: (name: string) => void;
   onMergeBranch?: (name: string) => void;
   onRebaseBranch?: (name: string) => void;
@@ -123,6 +125,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   onReset,
   onCreateBranch,
   onCompareBranch,
+  onSquash,
   onCheckoutBranch,
   onMergeBranch,
   onRebaseBranch,
@@ -143,6 +146,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   const [selectedCommitHash, setSelectedCommitHash] = useState<string>(
     commits.length > 0 ? commits[0].hash : ''
   );
+  const [squashHashes, setSquashHashes] = useState<string[] | null>(null);
   const [focusToken, setFocusToken] = useState(0);
   const [detailCollapsed, setDetailCollapsed] = useState(false);
   const [branchesCollapsed, setBranchesCollapsed] = useState(() => {
@@ -215,6 +219,10 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
       setBrowseHasMore(commitsHasMore);
       setFileCache({});
       setQueryError('');
+      // 压缩、重置这类改写会换掉顶端。原来选中的提交如果已经不在了，就跟到新的 HEAD。
+      if (head) {
+        setSelectedCommitHash(prev => (prev && commits.some(commit => commit.hash === prev) ? prev : head));
+      }
       return;
     }
     setExtraCommits(prev => prev.filter(commit => !commits.some(item => item.hash === commit.hash)));
@@ -506,6 +514,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         onReset={onReset}
         onCreateBranch={onCreateBranch}
         onCompareBranch={onCompareBranch}
+        onSquash={onSquash ? (hashes) => setSquashHashes(hashes) : undefined}
         currentBranch={currentBranch}
         listNote={listNote}
         listLoading={listLoading}
@@ -546,6 +555,17 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
       />
         </div>
         }
+      />
+      <SquashDialog
+        open={Boolean(squashHashes)}
+        repoPath={repoPath}
+        hashes={squashHashes ?? []}
+        onCancel={() => setSquashHashes(null)}
+        onConfirm={async (hashes, message) => {
+          const ok = await onSquash?.(hashes, message);
+          if (ok) setSquashHashes(null);
+          return Boolean(ok);
+        }}
       />
     </div>
   );

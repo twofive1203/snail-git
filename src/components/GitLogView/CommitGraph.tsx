@@ -9,9 +9,11 @@ import {
   RotateCcw, 
   PlusCircle, 
   Check, 
-  FileDiff 
+  FileDiff,
+  Combine,
 } from 'lucide-react';
 import { useI18n } from '../../i18n/react';
+import { inspectSquashSelection, type SquashIssue } from './squashSelection';
 import {
   GraphLayout,
   GraphLink,
@@ -84,6 +86,7 @@ interface CommitGraphProps {
   onReset?: (hash: string) => void;
   onCreateBranch?: (hash: string) => void;
   onCompareBranch?: (name: string) => void;
+  onSquash?: (hashes: string[]) => void;
   currentBranch?: string;
   listNote?: string;
   listLoading?: boolean;
@@ -155,12 +158,12 @@ function arrowPoints(x1: number, y1: number, x2: number, y2: number): string {
 function GraphOverlay({
   layout,
   anchors,
-  selectedIndex,
+  selectedIndices,
   headRows,
 }: {
   layout: GraphLayout;
   anchors: RowAnchor[];
-  selectedIndex: number;
+  selectedIndices: Set<number>;
   headRows: Set<number>;
 }) {
   if (anchors.length === 0 || anchors.length !== layout.rows.length) return null;
@@ -225,7 +228,7 @@ function GraphOverlay({
         const color = TRACK_COLORS[row.commitColor % TRACK_COLORS.length];
         const cx = laneCenter(row.commitLane);
         const cy = yOf(index, 'mid');
-        const selected = index === selectedIndex;
+        const selected = selectedIndices.has(index);
         return (
           <g key={`dot-${index}`}>
             <circle
@@ -256,6 +259,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   onReset,
   onCreateBranch,
   onCompareBranch,
+  onSquash,
   currentBranch = '',
   listNote = '',
   listLoading = false,
@@ -280,7 +284,8 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   const layout = useMemo(() => layoutGraph(commits), [commits]);
   const graphWidth = graphColumnWidth(layout.laneCount);
   const tableMinWidth = Math.max(760, graphWidth + 128 + 112 + 96 + 240);
-  const selectedIndex = commits.findIndex(commit => commit.hash === selectedHash);
+  const [selectedHashes, setSelectedHashes] = useState<string[]>([]);
+  const anchorRef = useRef('');
   const headRows = useMemo(() => {
     const rows = new Set<number>();
     commits.forEach((commit, index) => {
@@ -290,9 +295,85 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   }, [commits]);
 
   useEffect(() => {
+    setSelectedHashes(prev => {
+      const alive = prev.filter(hash => commits.some(commit => commit.hash === hash));
+      if (selectedHash && !alive.includes(selectedHash)) {
+        anchorRef.current = selectedHash;
+        return [selectedHash];
+      }
+      if (alive.length === 0 && selectedHash) {
+        anchorRef.current = selectedHash;
+        return [selectedHash];
+      }
+      return alive.length === prev.length ? prev : alive;
+    });
+  }, [commits, selectedHash]);
+
+  useEffect(() => {
     if (!focusToken) return;
     rowRefs.current.get(selectedHash)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [focusToken, selectedHash]);
+
+  const selectedIndices = useMemo(() => {
+    const indices = new Set<number>();
+    commits.forEach((commit, index) => {
+      if (selectedHashes.includes(commit.hash)) indices.add(index);
+    });
+    return indices;
+  }, [commits, selectedHashes]);
+
+  const squashIssue = inspectSquashSelection(commits, selectedHashes);
+  const squashIssueText = (issue: SquashIssue | null) => {
+    if (issue === 'need-more') return t('graph.squashNeedMore');
+    if (issue === 'gap') return t('graph.squashGap');
+    if (issue === 'merge') return t('graph.squashMerge');
+    if (issue === 'root') return t('graph.squashRoot');
+    if (issue === 'missing') return t('graph.squashMissing');
+    return t('graph.squashHint');
+  };
+
+  const selectOnly = (commit: GitCommit) => {
+    setSelectedHashes([commit.hash]);
+    anchorRef.current = commit.hash;
+    onSelectCommit(commit);
+  };
+
+  const handleRowClick = (event: React.MouseEvent, commit: GitCommit) => {
+    const index = commits.findIndex(item => item.hash === commit.hash);
+    if (event.shiftKey && anchorRef.current) {
+      const anchorIndex = commits.findIndex(item => item.hash === anchorRef.current);
+      if (anchorIndex >= 0 && index >= 0) {
+        const start = Math.min(anchorIndex, index);
+        const end = Math.max(anchorIndex, index);
+        setSelectedHashes(commits.slice(start, end + 1).map(item => item.hash));
+        onSelectCommit(commit);
+        return;
+      }
+    }
+    if (event.ctrlKey || event.metaKey) {
+      if (selectedHashes.includes(commit.hash)) {
+        const next = selectedHashes.filter(hash => hash !== commit.hash);
+        if (next.length === 0) return;
+        setSelectedHashes(next);
+        if (commit.hash === selectedHash) {
+          const fallback = commits.find(item => item.hash === next[next.length - 1]);
+          if (fallback) onSelectCommit(fallback);
+        }
+        return;
+      }
+      setSelectedHashes([...selectedHashes, commit.hash]);
+      anchorRef.current = commit.hash;
+      onSelectCommit(commit);
+      return;
+    }
+    selectOnly(commit);
+  };
+
+  const openSquash = (hashes: string[]) => {
+    if (inspectSquashSelection(commits, hashes)) return;
+    onSquash?.(hashes);
+    setContextMenu(prev => ({ ...prev, visible: false }));
+  };
 
   useEffect(() => {
     const dismiss = () => setContextMenu(prev => ({ ...prev, visible: false }));
@@ -302,10 +383,12 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
 
   const handleContextMenu = (e: React.MouseEvent, commit: GitCommit) => {
     e.preventDefault();
+    const keep = selectedHashes.includes(commit.hash) && selectedHashes.length > 1;
+    if (!keep) selectOnly(commit);
     setContextMenu({
       visible: true,
-      x: Math.min(e.clientX, window.innerWidth - 220),
-      y: Math.min(e.clientY, window.innerHeight - 260),
+      x: Math.min(e.clientX, window.innerWidth - 240),
+      y: Math.min(e.clientY, window.innerHeight - 320),
       commit
     });
   };
@@ -373,7 +456,6 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
         </thead>
         <tbody>
           {commits.map((commit) => {
-            const isSelected = commit.hash === selectedHash;
             const parsed = commit.refs.map(parseRef);
             const primary = parsed.filter(item => item.kind === 'head' || item.kind === 'local');
             const secondary = parsed.filter(item => item.kind === 'tag' || item.kind === 'remote');
@@ -389,10 +471,10 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                   if (node) rowRefs.current.set(commit.hash, node);
                   else rowRefs.current.delete(commit.hash);
                 }}
-                onClick={() => onSelectCommit(commit)}
+                onClick={(event) => handleRowClick(event, commit)}
                 onContextMenu={(e) => handleContextMenu(e, commit)}
                 className={`h-7 border-b border-jb-border/30 cursor-pointer transition-colors ${
-                  isSelected
+                  selectedHashes.includes(commit.hash)
                     ? 'bg-jb-selected text-jb-selectedText font-medium'
                     : 'hover:bg-jb-hover/80 text-jb-text-primary'
                 }`}
@@ -496,9 +578,35 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
       <GraphOverlay
         layout={layout}
         anchors={anchors}
-        selectedIndex={selectedIndex}
+        selectedIndices={selectedIndices}
         headRows={headRows}
       />
+      {selectedHashes.length > 1 && (
+        <div className="sticky bottom-0 z-30 flex items-center gap-2 px-3 py-1.5 bg-jb-panel/95 border-t border-jb-border text-[11px]">
+          <span className="text-jb-text-secondary">{t('graph.selectedCount', { count: selectedHashes.length })}</span>
+          <button
+            type="button"
+            disabled={squashIssue !== null}
+            title={squashIssueText(squashIssue)}
+            onClick={() => openSquash(selectedHashes)}
+            className="px-2 py-0.5 rounded border border-jb-blue/50 text-jb-blue hover:bg-jb-blue/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          >
+            {t('graph.squash')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const hash = selectedHash || selectedHashes[0];
+              const commit = commits.find(item => item.hash === hash);
+              if (commit) selectOnly(commit);
+            }}
+            className="px-2 py-0.5 rounded border border-jb-border text-jb-text-muted hover:text-jb-text-primary hover:bg-jb-hover"
+          >
+            {t('graph.clearSelection')}
+          </button>
+          {squashIssue && <span className="text-jb-text-muted truncate">{squashIssueText(squashIssue)}</span>}
+        </div>
+      )}
       </div>
 
       {/* IDEA 经典右键快捷菜单 */}
@@ -569,6 +677,16 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
           </button>
 
           <div className="h-px bg-jb-border my-1" />
+
+          <button
+            disabled={squashIssue !== null}
+            title={squashIssueText(squashIssue)}
+            onClick={() => openSquash(selectedHashes)}
+            className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-jb-text-primary"
+          >
+            <Combine className="w-3.5 h-3.5 text-amber-300" />
+            <span>{selectedHashes.length > 1 ? t('graph.squashCount', { count: selectedHashes.length }) : t('graph.squash')}</span>
+          </button>
 
           <button
             onClick={() => {

@@ -313,6 +313,16 @@ fn reset_to(repo_path: String, hash: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn preview_squash(repo_path: String, hashes: Vec<String>) -> Result<git_ops::SquashPreview, String> {
+    git_ops::preview_squash(&repo_path, &hashes)
+}
+
+#[tauri::command]
+fn squash_commits(repo_path: String, hashes: Vec<String>, message: String) -> Result<String, String> {
+    git_ops::squash_commits(&repo_path, &hashes, &message)
+}
+
+#[tauri::command]
 fn compare_branches(repo_path: String, name: String) -> Result<String, String> {
     git_ops::compare_stat(&repo_path, &name)
 }
@@ -694,6 +704,8 @@ pub fn run() {
             cherry_pick,
             revert_commit,
             reset_to,
+            preview_squash,
+            squash_commits,
             compare_branches,
             create_shelf,
             unshelve,

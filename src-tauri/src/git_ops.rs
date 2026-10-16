@@ -459,6 +459,20 @@ fn run_git(cwd: &str, args: &[&str], timeout: Duration) -> Result<Output, String
     run_git_global(cwd, &[], args, timeout)
 }
 
+fn run_git_with_env(
+    cwd: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    timeout: Duration,
+) -> Result<Output, String> {
+    let mut cmd = git_base(cwd);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    cmd.args(args);
+    output_timeout(cmd, timeout)
+}
+
 fn run_git_global(
     cwd: &str,
     global: &[&str],
@@ -3692,6 +3706,625 @@ pub fn compare_stat(repo: &str, name: &str) -> Result<String, String> {
     }
 }
 
+const SQUASH_BACKUP_FILE: &str = "snailgit-pre-squash";
+const SQUASH_WORK_BRANCH: &str = "snailgit-squash-work";
+const SQUASH_TIP_BRANCH: &str = "snailgit-squash-tip";
+const SQUASH_HISTORY_LIMIT: usize = 8000;
+const SQUASH_MAX_COMMITS: usize = 100;
+
+/// IDEA 的 Squash Commits 本质是 `git rebase -i`：把选中范围改成一条 pick + 若干 squash。
+/// 安装版没有终端，不能打开序列编辑器，所以在当前分支的一等父历史上软重置后再提交一次。
+/// 范围不在顶端时，把后面的提交重放到压缩结果上。失败会回到压缩前的提交。
+/// 备份只写在 Git 目录的文件里，不能放进 refs/，否则日志的 --all 会把旧提交再画出来。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SquashCommitDto {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub author: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SquashPreview {
+    pub branch: String,
+    pub commits: Vec<SquashCommitDto>,
+    pub message: String,
+    pub replay_count: u32,
+    pub pushed_on: Vec<String>,
+    pub also_on: Vec<String>,
+    pub has_local_changes: bool,
+}
+
+#[derive(Debug, Clone)]
+struct HistoryCommit {
+    hash: String,
+    parents: Vec<String>,
+    author: String,
+    email: String,
+    subject: String,
+    body: String,
+    committed_at: String,
+}
+
+struct SquashPlan {
+    branch: String,
+    head: String,
+    oldest_parent: String,
+    commits: Vec<HistoryCommit>,
+    replay_count: usize,
+    pushed_on: Vec<String>,
+    also_on: Vec<String>,
+    committed_at: String,
+}
+
+struct SquashRollback {
+    top: String,
+    branch: String,
+    backup: String,
+    stash: Option<String>,
+    armed: bool,
+    stash_pending: bool,
+}
+
+impl Drop for SquashRollback {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = restore_squash_point(&self.top, &self.branch, &self.backup);
+        }
+        if self.stash_pending {
+            if let Some(hash) = &self.stash {
+                let _ = restore_autostash(&self.top, hash);
+            }
+        }
+    }
+}
+
+fn parse_first_parent_log(text: &str) -> Vec<HistoryCommit> {
+    let mut commits = Vec::new();
+    for record in text.split('\x1e') {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+        let mut fields = record.splitn(7, '\x1f');
+        let hash = fields.next().unwrap_or("").trim().to_string();
+        if hash.len() < 7 || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            continue;
+        }
+        let parents = fields
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
+            .collect();
+        commits.push(HistoryCommit {
+            hash,
+            parents,
+            author: fields.next().unwrap_or("").trim().to_string(),
+            email: fields.next().unwrap_or("").trim().to_string(),
+            subject: fields.next().unwrap_or("").trim().to_string(),
+            committed_at: fields.next().unwrap_or("").trim().to_string(),
+            body: fields.next().unwrap_or("").trim().to_string(),
+        });
+    }
+    commits
+}
+
+fn normalize_hash_token(hash: &str) -> Result<String, String> {
+    let token = hash.trim().to_ascii_lowercase();
+    if (7..=40).contains(&token.len()) && token.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        Ok(token)
+    } else {
+        Err(format!("无效的提交哈希：{}", hash.trim()))
+    }
+}
+
+/// history 从新到旧。返回 (newest_index, oldest_index)。
+fn resolve_squash_span(history: &[HistoryCommit], hashes: &[String]) -> Result<(usize, usize), String> {
+    if hashes.len() < 2 {
+        return Err("请至少选择两个提交再压缩。".into());
+    }
+    if hashes.len() > SQUASH_MAX_COMMITS {
+        return Err(format!("一次最多压缩 {SQUASH_MAX_COMMITS} 个提交。"));
+    }
+    let mut indexes = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for raw in hashes {
+        let token = normalize_hash_token(raw)?;
+        if !seen.insert(token.clone()) {
+            continue;
+        }
+        let hits: Vec<usize> = history
+            .iter()
+            .enumerate()
+            .filter(|(_, commit)| {
+                let full = commit.hash.to_ascii_lowercase();
+                full == token || full.starts_with(&token)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        match hits.as_slice() {
+            [one] => indexes.push(*one),
+            [] => {
+                return Err(
+                    "只能压缩当前分支上的提交。有选中的提交不在当前分支的一等父历史上，可能来自其他分支，或距离当前提交太远。"
+                        .into(),
+                );
+            }
+            _ => return Err(format!("提交 {token} 在当前分支历史上不唯一，请使用更长的哈希。")),
+        }
+    }
+    if indexes.len() < 2 {
+        return Err("请至少选择两个提交再压缩。".into());
+    }
+    indexes.sort_unstable();
+    let newest = indexes[0];
+    let oldest = *indexes.last().unwrap();
+    if oldest - newest + 1 != indexes.len() {
+        return Err("选中的提交不连续，中间还有未选中的提交。请选择一段连续的提交再压缩。".into());
+    }
+    Ok((newest, oldest))
+}
+
+fn suggest_squash_message(commits: &[HistoryCommit]) -> String {
+    let mut parts = Vec::new();
+    for commit in commits {
+        let subject = commit.subject.trim();
+        let body = commit.body.trim();
+        if subject.is_empty() && body.is_empty() {
+            continue;
+        }
+        if body.is_empty() {
+            parts.push(subject.to_string());
+        } else if subject.is_empty() {
+            parts.push(body.to_string());
+        } else {
+            parts.push(format!("{subject}\n\n{body}"));
+        }
+    }
+    parts.join("\n\n")
+}
+
+fn squash_author_arg(commit: &HistoryCommit) -> Option<String> {
+    let name = commit.author.trim();
+    let email = commit.email.trim();
+    if name.is_empty()
+        || email.is_empty()
+        || name.contains(['<', '>', '\n', '\r'])
+        || email.contains([' ', '<', '>', '\n', '\r'])
+    {
+        return None;
+    }
+    Some(format!("{name} <{email}>"))
+}
+
+fn rewrite_blocked(top: &str) -> Result<(), String> {
+    if rebase_in_progress(top)
+        || git_path_exists(top, "MERGE_HEAD")
+        || git_path_exists(top, "CHERRY_PICK_HEAD")
+        || git_path_exists(top, "REVERT_HEAD")
+        || git_path_exists(top, "BISECT_LOG")
+    {
+        return Err("当前有未完成的变基、合并、挑拣或还原。请先完成或中止后再压缩提交。".into());
+    }
+    Ok(())
+}
+
+fn worktree_has_local_changes(top: &str) -> Result<bool, String> {
+    let output = run_git(
+        top,
+        &["status", "--porcelain=v1", "--untracked-files=normal"],
+        Duration::from_secs(12),
+    )?;
+    let text = ensure_ok(&output, "检查工作区")?;
+    Ok(text.lines().any(|line| !line.trim().is_empty()))
+}
+
+const SQUASH_STASH_MESSAGE: &str = "snailgit-squash-autostash";
+
+/// 和 IDEA 一样：先把未提交修改连同未跟踪文件挪走，压缩完再放回。
+/// 否则软重置后的提交会把已暂存内容卷进去。
+fn autostash_local_changes(top: &str) -> Result<Option<String>, String> {
+    if !worktree_has_local_changes(top)? {
+        return Ok(None);
+    }
+    let output = run_git(
+        top,
+        &[
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            SQUASH_STASH_MESSAGE,
+        ],
+        Duration::from_secs(30),
+    )?;
+    ensure_ok(&output, "暂存未提交修改")?;
+    if worktree_has_local_changes(top)? {
+        return Err("未能把未提交修改移出工作区，已停止压缩。".into());
+    }
+    let hash = run_git(top, &["rev-parse", "refs/stash"], Duration::from_secs(8))?;
+    Ok(Some(ensure_ok(&hash, "读取贮藏")?))
+}
+
+fn drop_stash_hash(top: &str, hash: &str) {
+    let Ok(output) = run_git(top, &["stash", "list", "--format=%gd %H"], Duration::from_secs(10)) else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    for line in lossy(&output.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        let name = parts.next().unwrap_or("");
+        let oid = parts.next().unwrap_or("");
+        if oid == hash && !name.is_empty() {
+            let _ = run_git(top, &["stash", "drop", name], Duration::from_secs(15));
+            return;
+        }
+    }
+}
+
+fn restore_autostash(top: &str, hash: &str) -> Result<(), String> {
+    let indexed = run_git(top, &["stash", "apply", "--index", hash], Duration::from_secs(30))?;
+    if indexed.status.success() {
+        drop_stash_hash(top, hash);
+        return Ok(());
+    }
+    let still_clean = !worktree_has_local_changes(top).unwrap_or(true);
+    if still_clean {
+        let plain = run_git(top, &["stash", "apply", hash], Duration::from_secs(30))?;
+        if plain.status.success() {
+            drop_stash_hash(top, hash);
+            return Ok(());
+        }
+        let err = lossy(&plain.stderr);
+        return Err(format!("未提交修改无法自动放回，仍保留在贮藏中。{err}"));
+    }
+    let err = lossy(&indexed.stderr);
+    Err(format!("未提交修改无法自动放回，仍保留在贮藏中。{err}"))
+}
+
+fn load_first_parent_history(top: &str) -> Result<Vec<HistoryCommit>, String> {
+    let limit = SQUASH_HISTORY_LIMIT.to_string();
+    let output = run_git(
+        top,
+        &[
+            "log",
+            "--first-parent",
+            "-n",
+            &limit,
+            "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%s%x1f%cI%x1f%b%x1e",
+            "HEAD",
+        ],
+        Duration::from_secs(30),
+    )?;
+    let text = ensure_ok(&output, "读取分支历史")?;
+    Ok(parse_first_parent_log(&text))
+}
+
+fn parse_branch_contains(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.contains("->") {
+            continue;
+        }
+        let name = line.trim_start_matches(['*', '+']).trim();
+        if name.is_empty() || name == SQUASH_WORK_BRANCH || name == SQUASH_TIP_BRANCH {
+            continue;
+        }
+        names.push(name.to_string());
+    }
+    names
+}
+
+fn refs_containing(top: &str, hash: &str, remote: bool) -> Vec<String> {
+    let mut args = vec!["branch", "--contains", hash];
+    if remote {
+        args.insert(1, "-r");
+    }
+    let Ok(output) = run_git(top, &args, Duration::from_secs(20)) else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_branch_contains(&lossy(&output.stdout))
+}
+
+fn plan_squash(top: &str, hashes: &[String]) -> Result<SquashPlan, String> {
+    rewrite_blocked(top)?;
+    let (branch, _) = current_branch(top)?;
+    if branch == "HEAD"
+        || branch.is_empty()
+        || branch == SQUASH_WORK_BRANCH
+        || branch == SQUASH_TIP_BRANCH
+    {
+        return Err("当前不是可改写的普通分支。请先切回要压缩的分支。".into());
+    }
+    let head_output = run_git(top, &["rev-parse", "HEAD"], Duration::from_secs(8))?;
+    let head = ensure_ok(&head_output, "读取 HEAD")?;
+    if head.is_empty() {
+        return Err("当前分支还没有提交。".into());
+    }
+    let history = load_first_parent_history(top)?;
+    if history.is_empty() || !history[0].hash.eq_ignore_ascii_case(&head) {
+        return Err("无法读取当前分支顶端。".into());
+    }
+    let (newest, oldest) = resolve_squash_span(&history, hashes)?;
+    for commit in &history[newest..=oldest] {
+        if commit.parents.len() > 1 {
+            return Err("选中范围内包含合并提交，不能压缩。".into());
+        }
+        if commit.parents.is_empty() {
+            return Err("选中范围包含仓库的第一个提交，暂不支持压缩根提交。".into());
+        }
+    }
+    if newest > 0 {
+        for commit in &history[..newest] {
+            if commit.parents.len() > 1 {
+                return Err(
+                    "选中范围之后还有合并提交。重放这些提交会拆掉合并结构，已拒绝。请只压缩直到当前分支顶端的连续提交。"
+                        .into(),
+                );
+            }
+        }
+    }
+    let oldest_parent = history[oldest].parents[0].clone();
+    let committed_at = history[newest].committed_at.clone();
+    let oldest_hash = history[oldest].hash.clone();
+    let mut commits = history[newest..=oldest].to_vec();
+    commits.reverse();
+    let pushed_on = refs_containing(top, &oldest_hash, true);
+    let also_on = refs_containing(top, &oldest_hash, false)
+        .into_iter()
+        .filter(|name| name != &branch)
+        .collect();
+    Ok(SquashPlan {
+        branch,
+        head,
+        oldest_parent,
+        replay_count: newest,
+        pushed_on,
+        also_on,
+        committed_at,
+        commits,
+    })
+}
+
+fn preview_from_plan(plan: &SquashPlan, has_local_changes: bool) -> SquashPreview {
+    SquashPreview {
+        branch: plan.branch.clone(),
+        commits: plan
+            .commits
+            .iter()
+            .map(|commit| SquashCommitDto {
+                hash: commit.hash.clone(),
+                short_hash: commit.hash.chars().take(7).collect(),
+                subject: commit.subject.clone(),
+                author: commit.author.clone(),
+            })
+            .collect(),
+        message: suggest_squash_message(&plan.commits),
+        replay_count: plan.replay_count as u32,
+        pushed_on: plan.pushed_on.clone(),
+        also_on: plan.also_on.clone(),
+        has_local_changes,
+    }
+}
+
+fn write_squash_message(message: &str) -> Result<PathBuf, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("snailgit-squash-{}-{stamp}.txt", std::process::id()));
+    let mut text = message.trim().to_string();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    fs::write(&path, text).map_err(|err| format!("无法写入提交说明：{err}"))?;
+    Ok(path)
+}
+
+fn create_squashed_commit(top: &str, plan: &SquashPlan, message: &str) -> Result<(), String> {
+    // 这里不能加 --。reset --soft 的参数是提交，一旦出现 -- 就会被当成路径。
+    let reset = run_git(
+        top,
+        &["reset", "--soft", &plan.oldest_parent],
+        Duration::from_secs(30),
+    )?;
+    ensure_ok(&reset, "软重置到压缩起点")?;
+    let message_path = write_squash_message(message)?;
+    let message_arg = message_path.to_string_lossy().to_string();
+    let author = plan.commits.first().and_then(squash_author_arg);
+    let mut args = vec![
+        "commit".to_string(),
+        "--allow-empty".to_string(),
+        "-F".to_string(),
+        message_arg,
+    ];
+    if let Some(author) = author {
+        args.push("--author".to_string());
+        args.push(author);
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut env = Vec::new();
+    if !plan.committed_at.is_empty() {
+        env.push(("GIT_AUTHOR_DATE", plan.committed_at.as_str()));
+        env.push(("GIT_COMMITTER_DATE", plan.committed_at.as_str()));
+    }
+    let output = run_git_with_env(top, &arg_refs, &env, Duration::from_secs(60));
+    let _ = fs::remove_file(&message_path);
+    ensure_ok(&output?, "写入压缩提交")?;
+    Ok(())
+}
+
+fn delete_temp_branch(top: &str, name: &str) {
+    let _ = run_git(top, &["branch", "-D", name], Duration::from_secs(10));
+}
+
+fn rev_parse_ref(top: &str, spec: &str) -> Result<String, String> {
+    let output = run_git(top, &["rev-parse", spec], Duration::from_secs(8))?;
+    ensure_ok(&output, "读取提交")
+}
+
+fn squash_with_replay(top: &str, plan: &SquashPlan, message: &str) -> Result<(), String> {
+    delete_temp_branch(top, SQUASH_WORK_BRANCH);
+    delete_temp_branch(top, SQUASH_TIP_BRANCH);
+    let tip = run_git(top, &["branch", "-f", SQUASH_TIP_BRANCH, "HEAD"], Duration::from_secs(15))?;
+    ensure_ok(&tip, "记录压缩前的分支顶端")?;
+    let newest = plan
+        .commits
+        .last()
+        .map(|commit| commit.hash.clone())
+        .ok_or_else(|| "没有可压缩的提交".to_string())?;
+    let work = run_git(
+        top,
+        &["switch", "-C", SQUASH_WORK_BRANCH, "--", &newest],
+        Duration::from_secs(30),
+    )?;
+    ensure_ok(&work, "切到要压缩的提交")?;
+    create_squashed_commit(top, plan, message)?;
+    let rebase = run_git(
+        top,
+        &["rebase", "--onto", SQUASH_WORK_BRANCH, &newest, SQUASH_TIP_BRANCH],
+        Duration::from_secs(120),
+    )?;
+    if !rebase.status.success() {
+        let err = lossy(&rebase.stderr);
+        let out = lossy(&rebase.stdout);
+        let detail = if err.is_empty() { out } else { err };
+        return Err(format!("重放后续提交失败，已停止压缩。{detail}"));
+    }
+    let squashed = rev_parse_ref(top, SQUASH_WORK_BRANCH)?;
+    let new_tip = rev_parse_ref(top, SQUASH_TIP_BRANCH)?;
+    if new_tip == plan.head {
+        return Err("重放后续提交没有产生新历史，已停止。".into());
+    }
+    let ancestor = run_git(
+        top,
+        &["merge-base", "--is-ancestor", &squashed, SQUASH_TIP_BRANCH],
+        Duration::from_secs(15),
+    )?;
+    if !ancestor.status.success() {
+        return Err("重放结果没有接在压缩提交上，已停止。".into());
+    }
+    let back = run_git(top, &["switch", "--", &plan.branch], Duration::from_secs(30))?;
+    ensure_ok(&back, "切回原分支")?;
+    let reset = run_git(top, &["reset", "--hard", SQUASH_TIP_BRANCH], Duration::from_secs(30))?;
+    ensure_ok(&reset, "更新当前分支")?;
+    delete_temp_branch(top, SQUASH_WORK_BRANCH);
+    delete_temp_branch(top, SQUASH_TIP_BRANCH);
+    Ok(())
+}
+
+fn restore_squash_point(top: &str, branch: &str, backup: &str) -> Result<(), String> {
+    if rebase_in_progress(top) {
+        let _ = run_git(top, &["rebase", "--abort"], Duration::from_secs(30));
+    }
+    if git_path_exists(top, "CHERRY_PICK_HEAD") {
+        let _ = run_git(top, &["cherry-pick", "--abort"], Duration::from_secs(20));
+    }
+    let _ = run_git(top, &["switch", "--", branch], Duration::from_secs(30));
+    let output = run_git(top, &["reset", "--hard", backup], Duration::from_secs(30))?;
+    ensure_ok(&output, "恢复压缩前的提交")?;
+    delete_temp_branch(top, SQUASH_WORK_BRANCH);
+    delete_temp_branch(top, SQUASH_TIP_BRANCH);
+    Ok(())
+}
+
+pub fn preview_squash(repo: &str, hashes: &[String]) -> Result<SquashPreview, String> {
+    let top = validate_repo(repo)?;
+    let has_local_changes = worktree_has_local_changes(&top)?;
+    let plan = plan_squash(&top, hashes)?;
+    Ok(preview_from_plan(&plan, has_local_changes))
+}
+
+fn squash_result_text(plan: &SquashPlan, head: &str, stash_note: Option<&str>) -> String {
+    let mut text = format!("已将 {} 个提交压缩为 {head}", plan.commits.len());
+    if let Some(note) = stash_note {
+        text.push('。');
+        text.push_str(note);
+    }
+    if !plan.pushed_on.is_empty() {
+        text.push_str("。这些提交已在远程，之后推送需要强制推送");
+    }
+    text.push_str(&format!("。撤销：git reset --hard {}", plan.head));
+    text
+}
+
+fn put_back_autostash(top: &str, stash: &Option<String>) -> Result<(), String> {
+    match stash {
+        Some(hash) => restore_autostash(top, hash),
+        None => Ok(()),
+    }
+}
+
+pub fn squash_commits(repo: &str, hashes: &[String], message: &str) -> Result<String, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let message = message.trim();
+    if message.is_empty() {
+        return Err("提交说明不能为空".into());
+    }
+    let plan = plan_squash(&top, hashes)?;
+    let stash = autostash_local_changes(&top)?;
+    let mut rollback = SquashRollback {
+        top: top.clone(),
+        branch: plan.branch.clone(),
+        backup: plan.head.clone(),
+        stash: stash.clone(),
+        armed: false,
+        stash_pending: stash.is_some(),
+    };
+    if let Err(err) = write_squash_backup(&top, &plan.head) {
+        return Err(err);
+    }
+    rollback.armed = true;
+    let rewritten = if plan.replay_count == 0 {
+        create_squashed_commit(&top, &plan, message)
+    } else {
+        squash_with_replay(&top, &plan, message)
+    };
+    if let Err(err) = rewritten {
+        rollback.armed = false;
+        rollback.stash_pending = false;
+        let restored = restore_squash_point(&top, &plan.branch, &plan.head);
+        let stashed_back = put_back_autostash(&top, &stash);
+        return match (restored, stashed_back) {
+            (Ok(()), Ok(())) => Err(format!("{err}\n仓库已恢复到压缩前。")),
+            (Ok(()), Err(stash_err)) => Err(format!("{err}\n仓库已恢复到压缩前。{stash_err}")),
+            (Err(restore_err), _) => Err(format!(
+                "{err}\n自动恢复失败：{restore_err}\n请执行 git reset --hard {}",
+                plan.head
+            )),
+        };
+    }
+    rollback.armed = false;
+    rollback.stash_pending = false;
+    let stash_note = match put_back_autostash(&top, &stash) {
+        Ok(()) => None,
+        Err(err) => Some(err),
+    };
+    let head = run_git(&top, &["rev-parse", "--short", "HEAD"], Duration::from_secs(8))
+        .ok()
+        .and_then(|output| ensure_ok(&output, "读取新提交").ok())
+        .unwrap_or_default();
+    Ok(squash_result_text(&plan, &head, stash_note.as_deref()))
+}
+
+fn write_squash_backup(top: &str, hash: &str) -> Result<(), String> {
+    let output = run_git(top, &["rev-parse", "--absolute-git-dir"], Duration::from_secs(8))?;
+    let git_dir = ensure_ok(&output, "定位 Git 目录")?;
+    fs::write(Path::new(&git_dir).join(SQUASH_BACKUP_FILE), format!("{hash}\n"))
+        .map_err(|err| format!("无法记录压缩前的位置：{err}"))
+}
+
 fn load_disk_repos() -> Vec<SavedRepoDisk> {
     let Ok(path) = repos_file() else {
         return Vec::new();
@@ -5625,6 +6258,257 @@ mod tests {
     fn is_merge_commit(repo: &str) -> bool {
         let output = run_git(repo, &["rev-parse", "--verify", "-q", "HEAD^2"], Duration::from_secs(8)).unwrap();
         output.status.success()
+    }
+
+    fn history_commit(hash: &str, parent: &str) -> HistoryCommit {
+        HistoryCommit {
+            hash: hash.to_string(),
+            parents: if parent.is_empty() {
+                Vec::new()
+            } else {
+                vec![parent.to_string()]
+            },
+            author: "A".into(),
+            email: "a@example.com".into(),
+            subject: hash.to_string(),
+            body: String::new(),
+            committed_at: "2024-01-01T00:00:00+00:00".into(),
+        }
+    }
+
+    #[test]
+    fn squash_span_requires_a_contiguous_first_parent_range() {
+        let history = vec![
+            history_commit("ccccccc1", "bbbbbbb1"),
+            history_commit("bbbbbbb1", "aaaaaaa1"),
+            history_commit("aaaaaaa1", "11111111"),
+        ];
+        let (newest, oldest) =
+            resolve_squash_span(&history, &["ccccccc1".into(), "bbbbbbb1".into()]).unwrap();
+        assert_eq!((newest, oldest), (0, 1));
+        assert!(resolve_squash_span(&history, &["ccccccc1".into(), "aaaaaaa1".into()]).is_err());
+        assert!(resolve_squash_span(&history, &["bbbbbbb1".into()]).is_err());
+    }
+
+    #[test]
+    fn first_parent_log_keeps_multiline_body() {
+        let text = "abc1234\x1fdef5678\x1fAlice\x1falice@example.com\x1fsubject\x1f2024-01-02T03:04:05+08:00\x1fline1\n\nline2\x1e";
+        let commits = parse_first_parent_log(text);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].subject, "subject");
+        assert_eq!(commits[0].committed_at, "2024-01-02T03:04:05+08:00");
+        assert_eq!(commits[0].body, "line1\n\nline2");
+        assert_eq!(commits[0].parents, vec!["def5678".to_string()]);
+        let message = suggest_squash_message(&commits);
+        assert_eq!(message, "subject\n\nline1\n\nline2");
+    }
+
+    fn squash_repo(prefix: &str) -> (PathBuf, String) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let dir = std::env::temp_dir().join(format!("{prefix}-{stamp}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        init_repo(&dir);
+        let path = dir.to_string_lossy().to_string();
+        git_ok(&path, &["config", "core.autocrlf", "false"]);
+        (dir, path)
+    }
+
+    fn commit_file(dir: &Path, path: &str, name: &str, content: &str, message: &str) {
+        fs::write(dir.join(name), content).unwrap();
+        git_ok(path, &["add", name]);
+        git_ok(path, &["commit", "-m", message]);
+    }
+
+    fn log_subjects(path: &str) -> Vec<String> {
+        load_commit_log(path, &CommitLogQuery::default())
+            .unwrap()
+            .commits
+            .into_iter()
+            .map(|commit| commit.subject)
+            .collect()
+    }
+
+    fn head_hash(path: &str) -> String {
+        let output = run_git(path, &["rev-parse", "HEAD"], Duration::from_secs(8)).unwrap();
+        lossy(&output.stdout)
+    }
+
+    #[test]
+    fn squash_tip_combines_trees_and_keeps_oldest_author() {
+        let (dir, path) = squash_repo("snail-git-squash-tip");
+        commit_file(&dir, &path, "root.txt", "root\n", "root");
+        fs::write(dir.join("a.txt"), "alice\n").unwrap();
+        git_ok(&path, &["add", "a.txt"]);
+        git_ok(
+            &path,
+            &[
+                "-c",
+                "user.name=Alice",
+                "-c",
+                "user.email=alice@example.com",
+                "commit",
+                "-m",
+                "alice work",
+            ],
+        );
+        commit_file(&dir, &path, "b.txt", "bob\n", "bob work");
+        commit_file(&dir, &path, "c.txt", "carol\n", "carol work");
+        let before = load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits;
+        assert_eq!(before.len(), 4);
+        let hashes = vec![before[0].hash.clone(), before[1].hash.clone(), before[2].hash.clone()];
+        let preview = preview_squash(&path, &hashes).unwrap();
+        assert_eq!(preview.replay_count, 0);
+        assert_eq!(preview.commits[0].subject, "alice work");
+        assert!(preview.message.contains("alice work") && preview.message.contains("carol work"));
+
+        let text = squash_commits(&path, &hashes, "feature done\n\ncombined").unwrap();
+        assert!(text.contains("已将 3 个提交压缩为"), "{text}");
+        let after = load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits;
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[0].subject, "feature done");
+        assert_eq!(after[0].author, "Alice");
+        let files = load_commit_files(&path, &after[0].hash).unwrap();
+        assert!(files.iter().any(|file| file.path == "a.txt"));
+        assert!(files.iter().any(|file| file.path == "c.txt"));
+        assert!(dir.join("b.txt").is_file());
+        assert!(text.contains("git reset --hard "));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn squash_middle_replays_later_commits() {
+        let (dir, path) = squash_repo("snail-git-squash-middle");
+        commit_file(&dir, &path, "base.txt", "base\n", "base");
+        commit_file(&dir, &path, "a.txt", "A\n", "commit a");
+        commit_file(&dir, &path, "b.txt", "B\n", "commit b");
+        commit_file(&dir, &path, "c.txt", "C\n", "commit c");
+        let before = load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits;
+        let hashes = vec![before[1].hash.clone(), before[2].hash.clone()];
+        let preview = preview_squash(&path, &hashes).unwrap();
+        assert_eq!(preview.replay_count, 1);
+        assert_eq!(preview.commits[0].subject, "commit a");
+
+        squash_commits(&path, &hashes, "ab together").unwrap();
+        assert_eq!(
+            log_subjects(&path),
+            vec!["commit c".to_string(), "ab together".to_string(), "base".to_string()]
+        );
+        assert_eq!(fs::read_to_string(dir.join("c.txt")).unwrap(), "C\n");
+        assert!(dir.join("a.txt").is_file() && dir.join("b.txt").is_file());
+        let branch = current_branch(&path).unwrap().0;
+        assert_eq!(branch, "main");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn squash_rejects_gaps_without_moving_head() {
+        let (dir, path) = squash_repo("snail-git-squash-guard");
+        commit_file(&dir, &path, "a.txt", "base\n", "base");
+        commit_file(&dir, &path, "a.txt", "A\n", "commit a");
+        commit_file(&dir, &path, "a.txt", "B\n", "commit b");
+        commit_file(&dir, &path, "a.txt", "C\n", "commit c");
+        let before = load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits;
+        let head = head_hash(&path);
+        let gap = preview_squash(&path, &[before[0].hash.clone(), before[2].hash.clone()]);
+        assert!(gap.is_err(), "{gap:?}");
+        assert_eq!(head_hash(&path), head);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn porcelain(path: &str) -> String {
+        let output = run_git(
+            path,
+            &["status", "--porcelain=v1", "--untracked-files=normal"],
+            Duration::from_secs(12),
+        )
+        .unwrap();
+        assert!(output.status.success(), "{}", lossy(&output.stderr));
+        // 不能用 lossy()：它会 trim 掉第一行开头的空格，未暂存修改就看不出来。
+        String::from_utf8_lossy(&output.stdout).trim_end().to_string()
+    }
+
+    fn stash_count(path: &str) -> usize {
+        let output = run_git(path, &["stash", "list"], Duration::from_secs(8)).unwrap();
+        assert!(output.status.success(), "{}", lossy(&output.stderr));
+        lossy(&output.stdout).lines().filter(|line| !line.trim().is_empty()).count()
+    }
+
+    #[test]
+    fn squash_puts_uncommitted_changes_back() {
+        let (dir, path) = squash_repo("snail-git-squash-dirty");
+        commit_file(&dir, &path, "a.txt", "one\n", "one");
+        commit_file(&dir, &path, "b.txt", "two\n", "two");
+        commit_file(&dir, &path, "c.txt", "three\n", "three");
+        fs::write(dir.join("a.txt"), "one\ndirty\n").unwrap();
+        fs::write(dir.join("staged.txt"), "staged\n").unwrap();
+        git_ok(&path, &["add", "staged.txt"]);
+        fs::write(dir.join("extra.txt"), "extra\n").unwrap();
+        let before = load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits;
+        let preview = preview_squash(&path, &[before[0].hash.clone(), before[1].hash.clone()]).unwrap();
+        assert!(preview.has_local_changes);
+
+        squash_commits(&path, &[before[0].hash.clone(), before[1].hash.clone()], "together").unwrap();
+        assert_eq!(log_subjects(&path)[0], "together");
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one\ndirty\n");
+        assert_eq!(fs::read_to_string(dir.join("extra.txt")).unwrap(), "extra\n");
+        assert_eq!(fs::read_to_string(dir.join("staged.txt")).unwrap(), "staged\n");
+        let status = porcelain(&path);
+        assert!(status.contains("staged.txt"), "{status}");
+        assert!(status.lines().any(|line| line.ends_with("staged.txt") && line.starts_with("A")), "{status}");
+        assert!(status.lines().any(|line| line.contains("a.txt") && line.starts_with(" M")), "{status}");
+        assert!(status.lines().any(|line| line.contains("extra.txt") && line.starts_with("??")), "{status}");
+        assert_eq!(stash_count(&path), 0);
+        let files = load_commit_files(&path, &load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits[0].hash).unwrap();
+        assert!(!files.iter().any(|file| file.path == "staged.txt" || file.path == "extra.txt"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn squash_failure_restores_uncommitted_changes() {
+        let (dir, path) = squash_repo("snail-git-squash-dirty-rollback");
+        commit_file(&dir, &path, "root.txt", "root\n", "root");
+        commit_file(&dir, &path, "a.txt", "one\n", "one");
+        commit_file(&dir, &path, "b.txt", "two\n", "two");
+        fs::write(dir.join("a.txt"), "one\ndirty\n").unwrap();
+        let hooks = dir.join(".git").join("hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
+        let before = load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits;
+        let head = head_hash(&path);
+        let err = squash_commits(&path, &[before[0].hash.clone(), before[1].hash.clone()], "nope").unwrap_err();
+        assert!(err.contains("恢复"), "{err}");
+        assert_eq!(head_hash(&path), head);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one\ndirty\n");
+        assert_eq!(stash_count(&path), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn squash_hook_failure_restores_the_branch() {
+        let (dir, path) = squash_repo("snail-git-squash-rollback");
+        commit_file(&dir, &path, "a.txt", "one\n", "one");
+        commit_file(&dir, &path, "b.txt", "two\n", "two");
+        commit_file(&dir, &path, "c.txt", "three\n", "three");
+        let hooks = dir.join(".git").join("hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
+        let before = load_commit_log(&path, &CommitLogQuery::default()).unwrap().commits;
+        let head = head_hash(&path);
+        let err = squash_commits(
+            &path,
+            &[before[0].hash.clone(), before[1].hash.clone()],
+            "should not land",
+        )
+        .unwrap_err();
+        assert!(err.contains("恢复") || err.contains("写入压缩提交"), "{err}");
+        assert_eq!(head_hash(&path), head);
+        assert_eq!(log_subjects(&path).len(), 3);
+        assert!(!rebase_in_progress(&path));
+        assert_eq!(current_branch(&path).unwrap().0, "main");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

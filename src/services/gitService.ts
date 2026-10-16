@@ -258,6 +258,31 @@ export async function resetTo(repoPath: string, hash: string): Promise<string> {
   return invokeTauri<string>('reset_to', { repoPath, hash });
 }
 
+export interface SquashCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+}
+
+export interface SquashPreview {
+  branch: string;
+  commits: SquashCommit[];
+  message: string;
+  replayCount: number;
+  pushedOn: string[];
+  alsoOn: string[];
+  hasLocalChanges: boolean;
+}
+
+export async function previewSquash(repoPath: string, hashes: string[]): Promise<SquashPreview> {
+  return invokeTauri<SquashPreview>('preview_squash', { repoPath, hashes });
+}
+
+export async function squashCommits(repoPath: string, hashes: string[], message: string): Promise<string> {
+  return invokeTauri<string>('squash_commits', { repoPath, hashes, message });
+}
+
 export async function compareBranches(repoPath: string, name: string): Promise<string> {
   return invokeTauri<string>('compare_branches', { repoPath, name });
 }
