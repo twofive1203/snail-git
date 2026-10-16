@@ -14,6 +14,7 @@ import {
 import { useI18n } from '../../i18n/react';
 
 interface BranchPanelProps {
+  repoKey?: string;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   branches: GitBranch[];
@@ -25,6 +26,9 @@ interface BranchPanelProps {
   onCompare?: (name: string) => void;
   onMerge?: (name: string) => void;
   onRebase?: (name: string) => void;
+  onUpdate?: (name: string) => void;
+  onPush?: (name: string) => void;
+  onRename?: (name: string) => void;
 }
 
 interface RemoteGroup {
@@ -39,7 +43,10 @@ interface MenuState {
   name: string;
   checkoutName: string;
   isCurrent: boolean;
+  isRemote: boolean;
 }
+
+const defaultOpen = { head: true, local: true, remote: false, tags: false };
 
 function groupRemotes(branches: GitBranch[]): RemoteGroup[] {
   const map = new Map<string, RemoteGroup>();
@@ -75,6 +82,7 @@ function AheadBehind({ ahead, behind }: { ahead?: number; behind?: number }) {
 }
 
 export const BranchPanel: React.FC<BranchPanelProps> = ({
+  repoKey = '',
   collapsed,
   onToggleCollapsed,
   branches,
@@ -86,10 +94,13 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
   onCompare,
   onMerge,
   onRebase,
+  onUpdate,
+  onPush,
+  onRename,
 }) => {
   const { t } = useI18n();
   const [query, setQuery] = useState('');
-  const [open, setOpen] = useState({ head: true, local: true, remote: true, tags: true });
+  const [open, setOpen] = useState(defaultOpen);
   const [openRemotes, setOpenRemotes] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<MenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -124,6 +135,11 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
   const detached = !currentBranch || currentBranch === 'HEAD';
   const headLabel = detached ? t('logBranches.detached') : currentBranch;
   const headBranch = localBranches.find(branch => branch.isCurrent || branch.name === currentBranch);
+
+  useEffect(() => {
+    setOpen(defaultOpen);
+    setOpenRemotes(new Set());
+  }, [repoKey]);
 
   useEffect(() => {
     if (!menu) return;
@@ -163,7 +179,7 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
     setMenu({
       ...next,
       x: Math.min(event.clientX, window.innerWidth - 196),
-      y: Math.min(event.clientY, window.innerHeight - 180),
+      y: Math.min(event.clientY, window.innerHeight - (next.kind === 'branch' && !next.isRemote ? 320 : 180)),
     });
   };
 
@@ -265,6 +281,7 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
                 name: branch.name,
                 checkoutName: branch.name,
                 isCurrent,
+                isRemote: false,
               })}
             />
           );
@@ -314,6 +331,7 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
                     name: item.fullName,
                     checkoutName: item.fullName,
                     isCurrent: false,
+                    isRemote: true,
                   })}
                 />
               ))}
@@ -341,6 +359,7 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
               name: tag.name,
               checkoutName: tag.hash || tag.name,
               isCurrent: false,
+              isRemote: false,
             })}
           />
         ))}
@@ -379,6 +398,26 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
                 label={t('logBranches.rebase')}
                 disabled={menu.isCurrent || !onRebase}
                 onClick={() => { onRebase?.(menu.name); setMenu(null); }}
+              />
+            </>
+          )}
+          {menu.kind === 'branch' && !menu.isRemote && (
+            <>
+              <div className="my-1 border-t border-jb-border/60" />
+              <MenuButton
+                label={t('logBranches.update')}
+                disabled={!onUpdate}
+                onClick={() => { onUpdate?.(menu.name); setMenu(null); }}
+              />
+              <MenuButton
+                label={t('logBranches.push')}
+                disabled={!onPush}
+                onClick={() => { onPush?.(menu.name); setMenu(null); }}
+              />
+              <MenuButton
+                label={t('logBranches.rename')}
+                disabled={!onRename}
+                onClick={() => { onRename?.(menu.name); setMenu(null); }}
               />
             </>
           )}

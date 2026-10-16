@@ -26,6 +26,9 @@ interface GitLogViewProps {
   onCheckoutBranch?: (name: string) => void;
   onMergeBranch?: (name: string) => void;
   onRebaseBranch?: (name: string) => void;
+  onUpdateBranch?: (name: string) => void;
+  onPushBranch?: (name: string) => void;
+  onRenameBranch?: (oldName: string, newName: string) => Promise<boolean>;
   branches?: GitBranch[];
   tags?: GitTag[];
   currentBranch?: string;
@@ -129,6 +132,9 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   onCheckoutBranch,
   onMergeBranch,
   onRebaseBranch,
+  onUpdateBranch,
+  onPushBranch,
+  onRenameBranch,
   branches: branchList = [],
   tags = [],
   currentBranch = '',
@@ -460,6 +466,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         className="flex-1 min-h-0"
         start={
           <BranchPanel
+            repoKey={repoPath}
             collapsed={branchesCollapsed}
             onToggleCollapsed={() => setBranchesCollapsed(value => !value)}
             branches={branchList}
@@ -471,6 +478,15 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
             onCompare={onCompareBranch}
             onMerge={onMergeBranch}
             onRebase={onRebaseBranch}
+            onUpdate={onUpdateBranch}
+            onPush={onPushBranch}
+            onRename={onRenameBranch ? (name) => {
+              const next = prompt(t('toast.renamePrompt'), name);
+              if (!next || next === name) return;
+              void onRenameBranch(name, next).then(ok => {
+                if (ok) setSelectedBranch(prev => prev === name ? next : prev);
+              });
+            } : undefined}
           />
         }
         end={

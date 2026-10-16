@@ -9,6 +9,8 @@ interface PushDialogProps {
   open: boolean;
   repoPath: string;
   refreshKey?: number;
+  /** 本次推送的本地源。空则由后端使用当前分支。 */
+  sourceBranch?: string;
   busy?: boolean;
   error?: string;
   onClose: () => void;
@@ -40,6 +42,7 @@ export const PushDialog: React.FC<PushDialogProps> = ({
   open,
   repoPath,
   refreshKey = 0,
+  sourceBranch = '',
   busy = false,
   error = '',
   onClose,
@@ -85,6 +88,7 @@ export const PushDialog: React.FC<PushDialogProps> = ({
         repoPath,
         requestedRemote || undefined,
         requestedBranch || undefined,
+        sourceBranch || undefined,
       );
       if (id !== seq.current) return;
       // 请求发出后用户又改了目标，不能把输入框打回这次结果。
@@ -110,13 +114,17 @@ export const PushDialog: React.FC<PushDialogProps> = ({
       setFileMode('selected');
       return;
     }
-    void reload(remoteRef.current || undefined, branchRef.current || undefined);
+    remoteRef.current = '';
+    branchRef.current = '';
+    setRemote('');
+    setBranch('');
+    void reload(undefined, undefined);
     return () => {
       window.clearTimeout(branchTimer.current);
     };
-    // 打开或远程配置变化时重新取默认目标；输入中的分支由下方处理函数单独刷新。
+    // 打开、换源或远程配置变化时重新取默认目标。换源必须丢掉上一次的远程分支，否则会预览错提交。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, repoPath, refreshKey]);
+  }, [open, repoPath, refreshKey, sourceBranch]);
 
   useEffect(() => {
     if (!open || busy) return;
@@ -370,7 +378,7 @@ export const PushDialog: React.FC<PushDialogProps> = ({
           </button>
           <button
             ref={pushRef}
-            onClick={() => canPush && onPush({ remote, branch: branchName, setUpstream })}
+            onClick={() => canPush && onPush({ remote, branch: branchName, setUpstream, source: sourceBranch || undefined })}
             disabled={!canPush}
             className="px-3 py-1.5 rounded bg-jb-blue hover:bg-jb-blueHover text-white font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >

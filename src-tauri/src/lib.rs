@@ -255,8 +255,13 @@ fn push_repo(app: AppHandle, repo_path: String, allow_set_upstream: bool) -> Res
 }
 
 #[tauri::command]
-fn preview_push(repo_path: String, remote: Option<String>, branch: Option<String>) -> Result<git_ops::PushPreview, String> {
-    git_ops::preview_push(&repo_path, remote.as_deref(), branch.as_deref())
+fn preview_push(
+    repo_path: String,
+    remote: Option<String>,
+    branch: Option<String>,
+    source: Option<String>,
+) -> Result<git_ops::PushPreview, String> {
+    git_ops::preview_push(&repo_path, remote.as_deref(), branch.as_deref(), source.as_deref())
 }
 
 #[tauri::command]
@@ -266,11 +271,27 @@ fn push_to(
     remote: String,
     branch: String,
     set_upstream: bool,
+    source: Option<String>,
 ) -> Result<git_ops::SyncOutcome, String> {
     let repo = repo_path.clone();
-    git_ops::push_to(&repo_path, &remote, &branch, set_upstream, &mut |line| {
-        emit_git_progress(&app, &repo, line)
-    })
+    git_ops::push_to(
+        &repo_path,
+        &remote,
+        &branch,
+        set_upstream,
+        source.as_deref(),
+        &mut |line| emit_git_progress(&app, &repo, line),
+    )
+}
+
+#[tauri::command]
+fn update_local_branch(
+    app: AppHandle,
+    repo_path: String,
+    name: String,
+) -> Result<git_ops::SyncOutcome, String> {
+    let repo = repo_path.clone();
+    git_ops::update_local_branch(&repo_path, &name, &mut |line| emit_git_progress(&app, &repo, line))
 }
 
 #[tauri::command]
@@ -697,6 +718,7 @@ pub fn run() {
             push_repo,
             preview_push,
             push_to,
+            update_local_branch,
             set_watch_paused,
             stash_save,
             stash_apply,

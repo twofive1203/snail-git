@@ -219,19 +219,38 @@ export interface PushTarget {
   remote: string;
   branch: string;
   setUpstream: boolean;
+  source?: string;
 }
 
-/** 只读本地远程跟踪引用，列出将要推送的提交。remote/branch 为空时由后端选默认目标。 */
-export async function previewPush(repoPath: string, remote?: string, branch?: string): Promise<PushPreview> {
+/** 只读本地远程跟踪引用，列出将要推送的提交。remote/branch 为空时由后端选默认目标。source 为空时源是当前分支。 */
+export async function previewPush(repoPath: string, remote?: string, branch?: string, source?: string): Promise<PushPreview> {
   return invokeTauri<PushPreview>('preview_push', {
     repoPath,
     ...(remote ? { remote } : {}),
     ...(branch ? { branch } : {}),
+    ...(source ? { source } : {}),
   });
 }
 
-export async function pushTo(repoPath: string, remote: string, branch: string, setUpstream: boolean): Promise<SyncOutcome> {
-  return invokeTauri<SyncOutcome>('push_to', { repoPath, remote, branch, setUpstream });
+export async function pushTo(
+  repoPath: string,
+  remote: string,
+  branch: string,
+  setUpstream: boolean,
+  source?: string,
+): Promise<SyncOutcome> {
+  return invokeTauri<SyncOutcome>('push_to', {
+    repoPath,
+    remote,
+    branch,
+    setUpstream,
+    ...(source ? { source } : {}),
+  });
+}
+
+/** 只快进未检出的本地分支。当前分支仍走 updateRepo。 */
+export async function updateLocalBranch(repoPath: string, name: string): Promise<SyncOutcome> {
+  return invokeTauri<SyncOutcome>('update_local_branch', { repoPath, name });
 }
 
 export async function stashSave(repoPath: string, message: string): Promise<string> {
