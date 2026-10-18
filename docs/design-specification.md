@@ -1,5 +1,7 @@
 # SnailGit 设计规格说明书与 IDEA Git 功能调研深度报告
 
+> ⚠️ **本文是立项期的调研 + 规划档案**。文中架构选型、内存数字、交付物清单反映的是原型阶段，**实际实现以代码为准**（对照表见各节标注）。当前 AI 写作约束见仓库根目录 `AGENTS.md`。
+
 ## 一、 项目背景与痛点定位
 
 ### 1.1 痛点：IntelliJ IDEA 的沉重开销
@@ -9,7 +11,7 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 - **轻量替代品痛点**：现有的轻量客户端中，GitKraken 资源占用同样偏大且商业收费，Sourcetree 界面老旧卡顿，VS Code 的 Git 体验相较于 IDEA 在双栏 Diff、Shelf（架藏）、3-Way Merge 冲突解决和拓扑图上存在明显差距。
 
 ### 1.2 SnailGit 的核心目标
-- **极致轻量**：运行时常驻内存控制在 **40 MB ~ 80 MB**，毫秒级瞬间秒开。
+- **极致轻量**：运行时常驻内存目标 **< 60MB**（界面状态栏展示真实进程 RSS），毫秒级瞬间秒开。
 - **1:1 复刻 IDEA 核心手感**：
   1. JetBrains New UI 暗黑高质感视觉体系；
   2. 丝滑的多轨道彩色贝塞尔曲线 Git Log 拓扑图谱；
@@ -34,31 +36,40 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 
 ---
 
-## 三、 SnailGit 技术架构演进路线
+## 三、 SnailGit 技术架构（现状，以代码为准）
+
+立项时规划的“异步进程池 + libgit2”等方案**均未采用**，实际实现如下：
 
 ```
-[前端表现层 (当前阶段)]
-├── React 18 + TypeScript + Vite + Tailwind CSS
-├── JetBrains New UI 主题配色体系
-├── 模块化组件树 (GitLog, CommitDiff, Branches, Shelf, ThreeWayMerge)
-└── 虚拟化列表与 SVG 拓扑网络图渲染引擎
+[前端表现层]  src/（React 18 + TypeScript + Vite 6 + Tailwind 3）
+├── JetBrains New UI 配色：tailwind.config.js 的 jb-* 令牌（jb-bg/#1E1F22、jb-panel/#2B2D30、jb-blue/#3574F0 …）
+├── 组件树：GitLogView / CommitView / ShelfStashView / BranchesModal / ThreeWayMergeModal / ProjectSidebar / common
+├── SVG 拓扑：gitLogView/graphLayout.ts 计算轨道，CommitGraph.tsx 渲染；列表为分页加载 + 全量渲染，**无虚拟化**
+└── i18n：src/i18n/messages.ts 中英双表 + useI18n().t()
 
-                     │ (IPC / REST / WebSocket)
+                     │ Tauri IPC（invoke，唯一通道；无 REST / WebSocket）
                      ▼
-[桌面应用与运行时层 (后续阶段)]
-├── 方案 A：Tauri 2.0 (Rust) —— 推荐首选方案
-│   ├── 内存占用：~35MB
-│   ├── 安装包体积：< 15MB
-│   └── 跨平台：Windows (WebView2) / macOS (WebKit) / Linux
-└── 方案 B：Go + Wails / Web 服务模式
-    └── 内存占用：~45MB，支持局域网或云端开发机远程 Git 监控
+[桌面运行时层]  src-tauri/（Tauri 2，已落地为主路径）
+├── lib.rs：#[tauri::command] 薄转发 + generate_handler! 注册；托盘常驻、单实例、关窗仅隐藏
+├── 窗口：tauri.conf.json decorations:false + WindowControls.tsx 自绘标题栏
+├── 打包：仅 Windows NSIS 安装包（currentUser 模式）；无 macOS / Linux 打包目标
+└── 依赖极简：tauri / tauri-plugin-single-instance / serde / serde_json（无 git2、无 tokio、无 HTTP 框架）
 
-                     │ (直接调用)
+                     │ 直接调用
                      ▼
-[Git 底层执行引擎]
-├── 轻量异步进程执行器 (git CLI 命令池)
-└── 配合 libgit2 (快速读取 packfile 与 tree 索引，避免全量重载)
+[Git 执行引擎]  src-tauri/src/git_ops.rs
+├── std::process::Command 同步执行（hidden_command + CREATE_NO_WINDOW），参数一律数组，不经 shell
+└── 显式超时：本地读写 Duration::from_secs(...)，网络 NETWORK_TIMEOUT + NETWORK_STALL
 ```
+
+已讨论但**未采纳/未实现**的备选（不要按此实现）：
+
+| 备选 | 当时理由 | 当前状态 |
+| :--- | :--- | :--- |
+| 异步进程池（tokio + 多命令并发） | 提升大仓库并发 | 未实现，实际是同步 Command + 超时 |
+| libgit2 / git2 crate（直接读 packfile） | 避免全量重载 | 未实现，且禁止新增该依赖 |
+| IPC / REST / WebSocket 多通道 | 支持远程开发机 | 未实现，只有 Tauri IPC |
+| 方案 B：Go + Wails / Web 服务模式 | 更轻的运行时 | 未实现，仓库无 Go 代码 |
 
 ---
 
@@ -66,9 +77,10 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 
 1. **完整前端工程脚手架**：Vite 6 + React 18 + TypeScript + Tailwind CSS，配置完善，支持独立热重载开发与一键静态构建发布。
 2. **主题设计规范**：复刻 JetBrains New UI 标准色值（`#1E1F22`, `#2B2D30`, `#3574F0`, `#59A869`, `#E35967` 等）。
-3. **真实模拟数据源 (`src/mock/gitData.ts`)**：涵盖多分支并行拓扑、真实代码双栏修改 Diff、文件架藏列表与多条 Stash。
+3. **浏览器预览兜底数据 (`src/mock/gitData.ts`)**：涵盖多分支并行拓扑、双栏修改 Diff、架藏与 Stash 列表。
+   - **仅在浏览器预览下生效**：`App.tsx` 以 `import.meta.env.DEV && !isTauriEnvironment()` 条件动态 import，正式产物与 Tauri 环境全部走真实 git。
 4. **核心交互界面与组件**：
-   - `Header.tsx`：顶部工具栏与实时内存状态指示（48 MB vs IDEA 2.6 GB）
+   - `Header.tsx`：顶部工具栏与内存指示（每 8s 调 `process_memory_mb` 展示真实进程 RSS；浏览器预览下退化为 JS heap）
    - `GitLogView/`：带 SVG 贝塞尔多分支连线、多维过滤、变更文件树与详情抽屉
    - `CommitView/`：Default Changelist 树、Side-by-Side 双栏 Diff（含行内高亮与块级暂存控制器）、复合提交动作栏
    - `BranchesModal.tsx`：全功能分支弹窗，支持即时过滤与右键操作

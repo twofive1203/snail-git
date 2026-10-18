@@ -2,7 +2,6 @@
 
 > 极致轻量、内存占用 < 60MB 的开源 IntelliJ IDEA 风格 Git 管理工具。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Vite](https://img.shields.io/badge/Vite-6.x-646CFF.svg)](https://vitejs.dev/)
 [![React](https://img.shields.io/badge/React-18.x-61DAFB.svg)](https://reactjs.org/)
 [![TailwindCSS](https://img.shields.io/badge/TailwindCSS-3.x-38B2AC.svg)](https://tailwindcss.com/)
@@ -15,7 +14,9 @@
 
 然而，IDEA 作为一个重型 IDE，往往需要占用 **2.5 GB ~ 4 GB+** 的内存，并伴随着漫长的启动时间和频繁的索引构建。如果只是想快速查看 Git 历史、对比分支、提交代码或挑拣提交（Cherry-pick），启动 IDEA 极其沉重。
 
-**SnailGit 的目标就是将 IDEA 的 Git 核心体验完全复刻并独立出来**，作为独立轻量桌面客户端（未来结合 Tauri）或本地 Web 服务运行，将常驻内存从几千兆压减至 **40MB~80MB**，秒级启动，手感丝滑。
+**SnailGit 的目标就是将 IDEA 的 Git 核心体验完全复刻并独立出来**，以 **Tauri 2 原生桌面应用**为主路径（已落地），将常驻内存从几千兆压减到 **< 60MB**（界面状态栏展示真实进程 RSS），秒级启动，手感丝滑。
+
+> 浏览器模式（`pnpm dev`）仅是开发预览：非 Tauri 环境下使用 `src/mock/gitData.ts` 假数据，不可读写真实仓库。AI 协作约束见 [AGENTS.md](AGENTS.md)。
 
 ---
 
@@ -78,12 +79,41 @@ pnpm run dev
 ```bash
 pnpm tauri dev
 ```
-秒级唤起原生独立桌面应用窗口，常驻内存仅约 40MB~50MB，无缝调用本地 Git 执行器。
+秒级唤起原生独立桌面应用窗口，无缝调用本地 Git 执行器。实际内存占用以窗口底部状态栏的 `RAM` 指示为准（目标 < 60MB）。
 
-### 4. 构建发布桌面生产安装包 (.exe / .msi / .dmg / .deb)
+### 4. 构建 Windows 安装包（NSIS）
 ```bash
 pnpm tauri build
 ```
+
+`src-tauri/tauri.conf.json` 当前只配置了 Windows NSIS 目标（`bundle.targets: ["nsis"]`，`currentUser` 安装模式），产出 `.exe` 安装器。macOS / Linux 打包目标尚未配置。
+
+---
+
+## 📦 当前已实现能力（维护时的对照表）
+
+以下能力已在代码中落地，为避免重复实现，改动前请先看对应文件/命令：
+
+| 能力 | 入口 |
+| :--- | :--- |
+| 中英文切换（zh 默认） | `src/i18n/messages.ts`、`useI18n()`；持久化 key `snail-git.locale` |
+| 托盘常驻 + 单实例（关窗仅隐藏，真退出走托盘菜单） | `src-tauri/src/lib.rs`（`tray-icon`、`tauri-plugin-single-instance`） |
+| 自绘无边框标题栏 | `tauri.conf.json` `decorations: false`、`src/components/WindowControls.tsx` |
+| 多仓库侧边栏 / 收藏 / 移除 | `src/components/ProjectSidebar/` |
+| 克隆仓库、远程管理（增删改 URL） | `clone_repo`、`list_remotes` / `add_remote` / `rename_remote` / `set_remote_url` / `remove_remote`，界面 `src/components/RemotesModal.tsx` |
+| Squash 合并提交 | `preview_squash` / `squash_commits`，界面 `src/components/GitLogView/SquashDialog.tsx` |
+| 分支比较 | `compare_branches`，命令行与提交对话框 |
+| 生成补丁 | `create_patch` |
+| 三方冲突解决 | `load_conflict` / `resolve_conflict` / `smart_merge_conflict`，界面 `src/components/merge/` |
+| 文件编码/换行检测 | `inspect_file`（状态栏展示） |
+| 仓库变化自动刷新 | `set_watch_path` / `set_watch_paused` + `lib.rs` 的 `watch_loop` |
+| 合并 / 变基 / 挑拣的中止与继续 | `repo_state` / `continue_operation` / `abort_operation`，界面 `src/components/OperationBar.tsx` |
+| Tag 新建 / 删除 / 推送 / 删除远程 | `create_tag` / `delete_tag` / `push_tag` / `delete_remote_tag`，界面 `src/components/GitLogView/TagDialog.tsx`、`RemotePickerDialog.tsx` |
+| 强制推送（仅 `--force-with-lease`） | `push_to` 的 `force` 参数 + `preview_push` 的 `needsForce`，界面 `src/components/PushDialog.tsx`；代码中不使用 `--force` |
+| 自绘输入 / 确认弹窗（无原生 `prompt` / `confirm`） | `src/components/common/askInput.ts` / `askConfirm.ts` / `dialogQueue.ts` / `InputDialog.tsx` / `ConfirmHost.tsx` |
+| Changelist 重命名 / 删除 | `src/components/CommitView/ChangelistTree.tsx`（`localStorage` key `snailgit.changelists.<repoKey>`，存储值保持 `更改` / `全部`） |
+
+工程约定（i18n、依赖白名单、Rust 命令链路、无前端测试框架等）见 [AGENTS.md](AGENTS.md)。
 
 ---
 

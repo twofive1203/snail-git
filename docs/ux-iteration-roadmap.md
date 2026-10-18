@@ -3,7 +3,28 @@
 > **版本**：v1.0.0  
 > **制定日期**：2025-02  
 > **文档定位**：指导 SnailGit 从“可用原型”向“工业级轻量 Git 生产力工具”迈进的交互体验与界面工程迭代路线图。  
-> **核心指标**：保持常驻内存 < 50MB、秒级启动、1:1 复刻 JetBrains IntelliJ IDEA 核心 Git 交互心智。
+> **核心指标**：保持常驻内存 < 60MB、秒级启动、1:1 复刻 JetBrains IntelliJ IDEA 核心 Git 交互心智。
+
+> ⚠️ **本文是历史规划（2025-02 制定），不是待办清单**。文中“现状诊断”和 Sprint 任务描述的是当时形态，多数已在后续版本落地。动手前先核对代码，不要把已完成项当需求重做。
+
+### 落地状态速查（以代码为准）
+
+| 文档章节 | 状态 | 现存实现 |
+| :--- | :--- | :--- |
+| 1.1 路径“保尾截中” | ✅ 已落地 | `src/components/common/FilePathDisplay.tsx`，CommitDetail / SideBySideDiff / ChangelistTree 在用 |
+| 1.1 表格表头与列宽 | ✅ 已落地 | `src/components/GitLogView/CommitGraph.tsx`：`colgroup` 固定像素列 + `graphWidth` 动态拓扑列 + i18n 列头 |
+| 1.1 Diff 装订线化（去横栏） | ✅ 已落地 | `src/components/CommitView/SideBySideDiff.tsx`：中缝 `@@` 标记、行块悬浮操作，无跨栏横条 |
+| 2.2 提交详情可拖拽 Splitter | ✅ 已落地 | `src/components/common/SplitPane.tsx`；`CommitDetail.tsx` 持久化 `snailgit.commitDetail.splitRatio` |
+| 2.3 Amend 回填 / 50-72 计数 / 前缀聚焦 | ✅ 已落地 | `src/components/CommitView/CommitActionBox.tsx` |
+| 2.4 未跟踪文件降噪与 Ignore 管理 | ✅ 已落地 | `appendGitignore` / `deleteUnversioned`（`gitService.ts`、`App.tsx` 接线） |
+| 3.1 Tauri 无边框一体化标题栏 | ✅ 已落地 | `tauri.conf.json` `decorations: false` + `src/components/WindowControls.tsx` |
+| 3.2 Ahead / Behind 角标 | ✅ 已落地 | `Header.tsx` / `StatusBar.tsx` 的 `aheadCount` / `behindCount` |
+| 3.3 过滤栏快捷预设（Me / Head / Reset） | ✅ 已落地 | `src/components/GitLogView/FilterBar.tsx` |
+| 4.1 快捷键（Alt+9 / Alt+0 / Ctrl+K / Ctrl+T / Ctrl+Shift+K / F7 / Ctrl+Enter / Esc） | ✅ 已落地 | `src/App.tsx`、`SideBySideDiff.tsx`、`CommitActionBox.tsx` |
+| 4.2 Compare With / Shelf 闭环 | ⚠️ 部分落地 | 分支比较已有 `compare_branches`；Shelf 面板见 `src/components/ShelfStashView/` |
+| 八、DoD “10,000+ 提交虚拟滚动 60fps” | ❌ 未实现 | 实际是分页加载 + 全量渲染（`CommitGraph.tsx` 的 loadMore），项目无虚拟化库 |
+
+内存口径以界面为准：`Header.tsx` / `StatusBar.tsx` 每 8s 展示进程真实 RSS（`process_memory_mb`），目标 < 60MB。
 
 ---
 
@@ -21,8 +42,8 @@
 
 ## 一、 现状诊断与体验演进原则
 
-### 1.1 现状诊断核心痛点
-结合目前系统截屏，主要存在以下四类体验摩擦：
+### 1.1 现状诊断核心痛点（2025-02 快照，均已修复，仅作背景）
+当时系统截屏呈现的摩擦，主要四类：
 1. **关键语义遮蔽**：长路径被纯末尾截断（Ellipsis），开发者无法获知究竟改动了哪个文件（类名丢失）；长分支名挤压提交说明。
 2. **布局边缘残缺**：Git Log 表格右侧 Commit 列头丢失、短哈希贴边截断，破坏界面的工整感。
 3. **代码阅读割裂**：Side-by-Side Diff 在每个变更块上方插入贯穿全宽的横向控制条，高频修改时代码被大块隔断，破坏代码垂直阅读连贯流。
@@ -195,56 +216,24 @@
 
 ## 七、 关键改动技术落地指南与代码规范
 
-### 7.1 文件路径“保尾截中”组件实现示范
-```tsx
-// src/components/common/FilePathDisplay.tsx
-import React from 'react';
+> 以下只写约束，不再复制实现代码。代码会漂移，文档不会自动同步；有疑问直接读文件。
 
-interface FilePathDisplayProps {
-  path: string;
-  className?: string;
-}
+### 7.1 文件路径“保尾截中”组件
 
-export const FilePathDisplay: React.FC<FilePathDisplayProps> = ({ path, className = '' }) => {
-  const normalized = path.replace(/\\/g, '/');
-  const lastSlashIndex = normalized.lastIndexOf('/');
-  
-  if (lastSlashIndex === -1) {
-    return <span className={`font-mono text-xs text-[#DFE1E5] font-medium ${className}`}>{normalized}</span>;
-  }
+已落地在 `src/components/common/FilePathDisplay.tsx`（CommitDetail、SideBySideDiff、ChangelistTree 共用）。约束：
 
-  const dir = normalized.substring(0, lastSlashIndex + 1);
-  const filename = normalized.substring(lastSlashIndex + 1);
+- props 为 `path`、`className?`、`filenameClassName?`。**`filenameClassName` 必须保留**：调用方用它传状态色（Modified 蓝 / Added 绿等），删掉会破坏调用方。
+- 内部先把 `\` 统一成 `/`；目录段 `truncate shrink min-w-0`，文件名段 `shrink-0` 且始终完整；`title` 挂完整路径。
+- 无目录段时输出单个 `span`。
+- 不要新建第二套路径组件。
 
-  return (
-    <div className={`flex items-center min-w-0 font-mono text-xs ${className}`} title={normalized}>
-      <span className="text-[#8C9099] truncate shrink min-w-0">{dir}</span>
-      <span className="text-[#DFE1E5] font-medium shrink-0 group-hover:text-white transition-colors">
-        {filename}
-      </span>
-    </div>
-  );
-};
-```
+### 7.2 Commit 表格列宽规范
 
-### 7.2 Commit 表格 fixed 布局规范示范
-```tsx
-// src/components/GitLogView/CommitGraph.tsx
-<table className="w-full table-fixed border-collapse text-xs font-sans min-w-[760px]">
-  <thead className="sticky top-0 bg-jb-panel/95 border-b border-jb-border z-10 text-jb-text-muted font-medium select-none shadow-sm">
-    <tr>
-      <th className="py-1.5 px-3 text-left font-normal w-20">Graph</th>
-      <th className="py-1.5 px-2 text-left font-normal">Description</th>
-      <th className="py-1.5 px-2 text-left font-normal w-32">Author</th>
-      <th className="py-1.5 px-2 text-left font-normal w-28">Date</th>
-      <th className="py-1.5 pr-4 text-right font-normal w-24">Commit</th>
-    </tr>
-  </thead>
-  <tbody>
-    {/* ... */}
-  </tbody>
-</table>
-```
+以 `src/components/GitLogView/CommitGraph.tsx` 现状为准：
+
+- `<table className="w-full table-fixed border-collapse text-xs font-sans">`，最小宽度由 `tableMinWidth` 走 `style` 控制（不是 `min-w-[760px]` 类）。
+- 列宽用 `<colgroup>`：Graph 列 `graphWidth`（按轨道数动态计算，**不得固定 w-20**）、Description 弹性、Author 128px、Date 112px、Commit 96px 右对齐。
+- 列头文案必须走 i18n：`t('graph.column.graph' | 'graph.column.description' | 'graph.column.author' | 'graph.column.date' | 'graph.column.commit')`，禁止硬编码中英文。
 
 ---
 
@@ -262,4 +251,4 @@ export const FilePathDisplay: React.FC<FilePathDisplayProps> = ({ path, classNam
    - [ ] 常用 IDEA 快捷键无按键冲突且符合 Muscle Memory。
 3. **系统性能基线守底**：
    - [ ] 常驻内存占用严格保持在 **< 60MB**。
-   - [ ] 切换 10,000+ 级提交的大型仓库时，列表滚动帧率稳定在 60fps（虚拟滚动完备）。
+   - [ ] 切换大型仓库（10,000+ 提交）时列表滚动保持流畅。当前实现是**分页加载 + 全量渲染（未做虚拟滚动）**，验收以不卡顿为准，不要按“虚拟滚动完备”判定。
