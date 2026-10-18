@@ -15,6 +15,7 @@ import {
   Minus
 } from 'lucide-react';
 import { askConfirm } from '../common/askConfirm';
+import { askInput } from '../common/askInput';
 import { useI18n } from '../../i18n/react';
 
 interface ChangelistTreeProps {
@@ -42,6 +43,32 @@ interface TreeNode {
   submoduleTag?: string; // 如 eam-agent
 }
 
+/**
+ * 这两个是**状态值与持久化值**，不只是展示文案。
+ * 展示走 t('changes.default') / t('changes.all')；比较与存储必须用常量，
+ * 改了会让老用户的 localStorage 数据失配（见 §E R-E5）。
+ */
+const DEFAULT_LIST = '更改';
+const ALL_LISTS = '全部';
+
+const NEW_LIST = '__new__';
+const MOVE_HERE = '__move__';
+const RENAME_LIST = '__rename__';
+const DELETE_LIST = '__delete__';
+
+/** 重命名/删除时把 assignments 里的旧名换掉。 */
+function remapAssignments(
+  map: Record<string, string>,
+  from: string,
+  to: string,
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [path, list] of Object.entries(map)) {
+    next[path] = list === from ? to : list;
+  }
+  return next;
+}
+
 export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   changes,
   selectedFileId,
@@ -64,16 +91,21 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     file?: FileChange;
   } | null>(null);
   const storageKey = `snailgit.changelists.${repoKey}`;
-  const [changelistNames, setChangelistNames] = useState<string[]>(['更改']);
+  const [changelistNames, setChangelistNames] = useState<string[]>([DEFAULT_LIST]);
   const [assignments, setAssignments] = useState<Record<string, string>>({});
-  const [activeList, setActiveList] = useState('全部');
+  const [activeList, setActiveList] = useState(ALL_LISTS);
 
   useEffect(() => {
+    // 换仓库时必须重置：否则上一个仓库的列表会被写进新仓库的 key。
+    setChangelistNames([DEFAULT_LIST]);
+    setAssignments({});
+    setActiveList(ALL_LISTS);
     try {
       const raw = localStorage.getItem(storageKey);
       if (!raw) return;
       const parsed = JSON.parse(raw) as { names?: string[]; assignments?: Record<string, string> };
-      if (parsed.names?.length) setChangelistNames(Array.from(new Set(['更改', ...parsed.names])));
+      // 老数据里 names 已经含默认列表，这里去重并保证默认列表存在。
+      if (parsed.names?.length) setChangelistNames(Array.from(new Set([DEFAULT_LIST, ...parsed.names])));
       if (parsed.assignments) setAssignments(parsed.assignments);
     } catch {
       /* 本地列表损坏时退回默认列表 */
@@ -88,6 +120,50 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     } catch {
       /* 浏览器禁止本地存储时，列表只在当前会话有效 */
     }
+  };
+
+  /** 默认列表与全部视图不能改名、不能删。 */
+  const canEditActiveList = activeList !== DEFAULT_LIST && activeList !== ALL_LISTS;
+
+  const renameActiveList = () => {
+    if (!canEditActiveList) return;
+    const current = activeList;
+    void askInput({
+      title: t('changes.renameListPrompt', { name: current }),
+      defaultValue: current,
+      confirmLabel: t('common.rename'),
+      tone: 'primary',
+      validate: (next) => (next !== current && changelistNames.includes(next)
+        ? t('changes.listExists', { name: next })
+        : null),
+    }).then(next => {
+      if (!next || next === current) return;
+      persistLists(
+        changelistNames.map(name => (name === current ? next : name)),
+        remapAssignments(assignments, current, next),
+      );
+      setActiveList(next);
+    });
+  };
+
+  const deleteActiveList = () => {
+    if (!canEditActiveList) return;
+    const target = activeList;
+    const count = Object.values(assignments).filter(name => name === target).length;
+    void askConfirm({
+      title: t('changes.deleteListTitle'),
+      message: t('changes.deleteListConfirm', { name: target, count }),
+      confirmLabel: t('common.delete'),
+      tone: 'danger',
+    }).then(ok => {
+      if (!ok) return;
+      // 删除后文件回默认列表；视图切到全部，避免看到一个空白列表。
+      persistLists(
+        changelistNames.filter(name => name !== target),
+        remapAssignments(assignments, target, DEFAULT_LIST),
+      );
+      setActiveList(ALL_LISTS);
+    });
   };
   // 视图模式：树状视图 (tree) vs 扁平列表 (flat)
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
@@ -111,8 +187,8 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   );
 
   const visibleChanges = changes.filter(file => {
-    if (activeList === '全部') return true;
-    return (assignments[file.path] || '更改') === activeList;
+    if (activeList === ALL_LISTS) return true;
+    return (assignments[file.path] || DEFAULT_LIST) === activeList;
   });
   const trackedFiles = visibleChanges.filter(c => c.status !== 'untracked');
   const untrackedFiles = visibleChanges.filter(c => c.status === 'untracked');
@@ -599,28 +675,47 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
               aria-label={t('changes.list')}
               title={t('changes.list')}
               onChange={(e) => {
-                if (e.target.value === '__new__') {
-                  const name = prompt(t('changes.newListPrompt'), '');
-                  if (name && !changelistNames.includes(name)) persistLists([...changelistNames, name], assignments);
-                  if (name) setActiveList(name);
+                // 受控 select：这四个分支必须在末尾的 setActiveList 之前 return，
+                // 否则下拉框会停在哨兵值上。
+                if (e.target.value === NEW_LIST) {
+                  void askInput({
+                    title: t('changes.newListPrompt'),
+                    confirmLabel: t('common.create'),
+                    tone: 'primary',
+                    validate: (name) => (changelistNames.includes(name) ? t('changes.listExists', { name }) : null),
+                  }).then(name => {
+                    if (!name) return;
+                    persistLists([...changelistNames, name], assignments);
+                    setActiveList(name);
+                  });
                   return;
                 }
-                if (e.target.value === '__move__') {
+                if (e.target.value === MOVE_HERE) {
                   const file = changes.find(item => item.id === selectedFileId);
-                  const target = activeList === '全部' ? '更改' : activeList;
+                  const target = activeList === ALL_LISTS ? DEFAULT_LIST : activeList;
                   if (file) persistLists(changelistNames, { ...assignments, [file.path]: target });
+                  return;
+                }
+                if (e.target.value === RENAME_LIST) {
+                  renameActiveList();
+                  return;
+                }
+                if (e.target.value === DELETE_LIST) {
+                  deleteActiveList();
                   return;
                 }
                 setActiveList(e.target.value);
               }}
               className="bg-transparent border-none text-[#DFE1E5] focus:outline-none cursor-pointer font-medium w-[5.5rem] max-w-full min-w-0"
             >
-              <option value="全部" className="bg-[#2B2D30]">{t('changes.all')}</option>
+              <option value={ALL_LISTS} className="bg-[#2B2D30]">{t('changes.all')}</option>
               {changelistNames.map(name => (
-                <option key={name} value={name} className="bg-[#2B2D30]">{name === '更改' ? t('changes.default') : name}</option>
+                <option key={name} value={name} className="bg-[#2B2D30]">{name === DEFAULT_LIST ? t('changes.default') : name}</option>
               ))}
-              <option value="__new__" className="bg-[#2B2D30]">{t('changes.newList')}</option>
-              <option value="__move__" className="bg-[#2B2D30]">{t('changes.moveHere')}</option>
+              <option value={NEW_LIST} className="bg-[#2B2D30]">{t('changes.newList')}</option>
+              <option value={MOVE_HERE} className="bg-[#2B2D30]">{t('changes.moveHere')}</option>
+              <option value={RENAME_LIST} disabled={!canEditActiveList} className="bg-[#2B2D30]">{t('changes.renameList')}</option>
+              <option value={DELETE_LIST} disabled={!canEditActiveList} className="bg-[#2B2D30]">{t('changes.deleteList')}</option>
             </select>
           </div>
         </div>

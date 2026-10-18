@@ -15,20 +15,28 @@ import { StashDialog } from './components/ShelfStashView/StashDialog';
 import { AddProjectModal, type CloneRequest } from './components/ProjectSidebar/AddProjectModal';
 import { RemotesModal } from './components/RemotesModal';
 import { PushDialog } from './components/PushDialog';
+import { OperationBar } from './components/OperationBar';
+import { TagDialog, type TagDraft } from './components/GitLogView/TagDialog';
+import { RemotePickerDialog } from './components/GitLogView/RemotePickerDialog';
 import { DiffChunk, FileChange, GitBranch, GitCommit, GitRepository, GitTag, RevisionFile, ShelfItem, StashItem } from './types/git';
 import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive } from 'lucide-react';
 import {
   addSavedRepo,
+  abortOperation,
   appendGitignore,
   applyChunk,
   checkoutBranch,
   cherryPick,
   commitChanges,
+  continueOperation,
   createBranch,
   createPatch,
   createShelf,
+  createTag,
   deleteBranch,
+  deleteRemoteTag,
   deleteShelf,
+  deleteTag,
   deleteUnversioned,
   discardPaths,
   cloneRepo,
@@ -36,6 +44,7 @@ import {
   fetchRepo,
   inspectFile,
   isTauriEnvironment,
+  listRemotes,
   listenGitChanged,
   listenGitProgress,
   loadConflict,
@@ -48,7 +57,9 @@ import {
   pickDirectory,
   processMemoryMb,
   pushTo,
+  pushTag,
   rebaseOnto,
+  repoState,
   updateLocalBranch,
   removeSavedRepo,
   renameBranch,
@@ -71,10 +82,12 @@ import {
   unstagePaths,
   updateRepo,
   type PushTarget,
+  type RepoOperationState,
   type SyncOutcome,
   type UpdateResponse,
 } from './services/gitService';
 import { askConfirm, isAskConfirmOpen } from './components/common/askConfirm';
+import { askInput } from './components/common/askInput';
 import { ConfirmHost } from './components/common/ConfirmHost';
 import { ConfirmDialog, type ConfirmAction } from './components/common/ConfirmDialog';
 import type { MessageKey } from './i18n';
@@ -138,6 +151,12 @@ export function App() {
   const [conflictWorking, setConflictWorking] = useState('');
   const [conflictLoading, setConflictLoading] = useState(false);
   const [conflictGen, setConflictGen] = useState(0);
+  const [operationState, setOperationState] = useState<RepoOperationState | null>(null);
+  const [tagDraft, setTagDraft] = useState<TagDraft | null>(null);
+  const [tagBusy, setTagBusy] = useState(false);
+  const [tagError, setTagError] = useState('');
+  /** 推送/删除远程标签时选中的远程；非空时弹出远程选择框。 */
+  const [tagRemote, setTagRemote] = useState<{ mode: 'push' | 'delete'; name: string; remotes: string[] } | null>(null);
   const [diffTitle, setDiffTitle] = useState('');
   const [diffFiles, setDiffFiles] = useState<RevisionFile[]>([]);
   const diffLoader = useRef<(path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>>(async () => []);
@@ -200,6 +219,8 @@ export function App() {
     setTags(snap.tags ?? []);
     setStashes(snap.stashes);
     setShelves(snap.shelves);
+    // 中断状态要跟快照一起刷新：继续/中止之后冲突横幅和动作条都得跟着变。
+    setOperationState(await repoState(repoPath).catch(() => null));
     setRepositories(prev => prev.map(r => r.path === repoPath ? {
       ...r,
       currentBranch: snap.currentBranch,
@@ -354,7 +375,14 @@ export function App() {
     setPushError('');
     void guardNetwork('push', async (repoPath) => {
       try {
-        const outcome = await pushTo(repoPath, target.remote, target.branch, target.setUpstream, target.source);
+        const outcome = await pushTo(
+          repoPath,
+          target.remote,
+          target.branch,
+          target.setUpstream,
+          target.source,
+          target.force,
+        );
         if (outcome.status === 'ok' || outcome.status === 'up_to_date') {
           setPushOpen(false);
           await finishNetwork(repoPath, outcome);
@@ -362,7 +390,8 @@ export function App() {
         }
         applySyncCounts(repoPath, outcome);
         setPushError(outcome.message);
-        showToast(outcome.message || t('common.done'), true);
+        // needs_force 不是失败：远程确实有本地没有的提交，对话框会据此放出强制推送开关。
+        showToast(outcome.message || t('common.done'), outcome.status !== 'needs_force');
         acceptProgress.current = false;
         setBusyLabel(null);
         await refresh(repoPath);
@@ -379,6 +408,42 @@ export function App() {
     setPendingConfirm(null);
     showToast(t('common.cancelled'));
   }, [t]);
+
+  /**
+   * 继续被中断的合并 / 变基 / 挑拣 / 还原。
+   * 变基可能停在下一个冲突上，此时操作仍是 rebase，属于正常进展。
+   */
+  const handleContinueOperation = useCallback(() => {
+    if (!activeRepo) return;
+    const repoPath = activeRepo.path;
+    void run(t('toast.operationContinued'), async () => {
+      const next = await continueOperation(repoPath);
+      setOperationState(next);
+      // 变基停在下一个冲突上属于正常进展，不能当失败提示。
+      if (next.operation !== 'none' && next.unmergedPaths.length > 0) {
+        return t('app.operation.pending', { count: next.unmergedPaths.length });
+      }
+      return t('toast.operationContinued');
+    });
+  }, [activeRepo, run, t]);
+
+  const handleAbortOperation = useCallback(() => {
+    if (!activeRepo) return;
+    const repoPath = activeRepo.path;
+    void askConfirm({
+      title: t('confirm.abortOperationTitle'),
+      message: t('app.operation.abortConfirm'),
+      confirmLabel: t('confirm.abortOperation'),
+      tone: 'danger',
+    }).then(ok => {
+      if (!ok) return;
+      void run(t('toast.operationAborted'), async () => {
+        const next = await abortOperation(repoPath);
+        setOperationState(next);
+        return t('toast.operationAborted');
+      });
+    });
+  }, [activeRepo, run, t]);
 
   const chooseConfirm = useCallback((value: string) => {
     const pending = pendingConfirm;
@@ -653,6 +718,124 @@ export function App() {
     }
   }, [activeRepo]);
 
+  const openConflictTab = useCallback(() => {
+    setActiveTab('merge');
+    const first = changes.find(file => file.status === 'conflict');
+    if (first) void loadConflictFile(first.path);
+  }, [changes, loadConflictFile]);
+
+  const openTagDialog = useCallback((target: string, targetLabel: string) => {
+    if (!isTauriEnvironment() || !activeRepo) {
+      showToast(t('toast.previewNoWrite'), true);
+      return;
+    }
+    setTagError('');
+    setTagDraft({ target, targetLabel });
+  }, [activeRepo, t]);
+
+  const confirmCreateTag = useCallback((name: string, message: string) => {
+    const draft = tagDraft;
+    if (!draft || !activeRepo) return;
+    const repoPath = activeRepo.path;
+    setTagBusy(true);
+    setTagError('');
+    void createTag(repoPath, name, draft.target, message || undefined)
+      .then(async text => {
+        setTagDraft(null);
+        showToast(text || t('toast.tagCreated'));
+        await refresh(repoPath);
+      })
+      .catch(err => setTagError(String(err)))
+      .finally(() => setTagBusy(false));
+  }, [activeRepo, tagDraft, refresh, t]);
+
+  /** 推送标签：只有一个远程时也走选择框，保持推送到哪个远程可见。 */
+  const openTagPush = useCallback((name: string) => {
+    if (!isTauriEnvironment() || !activeRepo) {
+      showToast(t('toast.previewNoWrite'), true);
+      return;
+    }
+    const repoPath = activeRepo.path;
+    setTagError('');
+    void listRemotes(repoPath)
+      .then(list => {
+        const names = list.remotes.map(remote => remote.name);
+        if (names.length === 0) {
+          showToast(t('toast.tagNoRemote'), true);
+          return;
+        }
+        setTagRemote({ mode: 'push', name, remotes: names });
+      })
+      .catch(err => showToast(String(err), true));
+  }, [activeRepo, t]);
+
+  const runTagRemote = useCallback((remote: string) => {
+    const target = tagRemote;
+    if (!target || !activeRepo) return;
+    const repoPath = activeRepo.path;
+    setTagBusy(true);
+    setTagError('');
+    const action = target.mode === 'push'
+      ? pushTag(repoPath, target.name, remote)
+      : deleteRemoteTag(repoPath, target.name, remote);
+    void action
+      .then(async text => {
+        setTagRemote(null);
+        showToast(text || (target.mode === 'push' ? t('toast.tagPushed') : t('toast.tagRemoteDeleted')));
+        await refresh(repoPath);
+      })
+      .catch(err => setTagError(String(err)))
+      .finally(() => setTagBusy(false));
+  }, [activeRepo, tagRemote, refresh, t]);
+
+  const handleDeleteTag = useCallback((name: string) => {
+    if (!isTauriEnvironment() || !activeRepo) {
+      showToast(t('toast.previewNoWrite'), true);
+      return;
+    }
+    const repoPath = activeRepo.path;
+    void askConfirm({
+      title: t('tag.deleteConfirmTitle'),
+      message: t('tag.deleteConfirm', { name }),
+      confirmLabel: t('common.delete'),
+      tone: 'danger',
+    }).then(ok => {
+      if (!ok) return;
+      void run(t('toast.tagDeleted'), async () => {
+        const text = await deleteTag(repoPath, name);
+        return text || t('toast.tagDeleted');
+      });
+    });
+  }, [activeRepo, run, t]);
+
+  const handleDeleteRemoteTag = useCallback((name: string) => {
+    if (!isTauriEnvironment() || !activeRepo) {
+      showToast(t('toast.previewNoWrite'), true);
+      return;
+    }
+    const repoPath = activeRepo.path;
+    void listRemotes(repoPath)
+      .then(list => {
+        const names = list.remotes.map(remote => remote.name);
+        if (names.length === 0) {
+          showToast(t('toast.tagNoRemote'), true);
+          return;
+        }
+        // 删除远程标签是破坏性动作，先确认再选远程。
+        void askConfirm({
+          title: t('tag.deleteRemoteTitle'),
+          message: t('tag.deleteRemoteHint', { name }),
+          confirmLabel: t('tag.deleteRemote'),
+          tone: 'danger',
+        }).then(ok => {
+          if (!ok) return;
+          setTagError('');
+          setTagRemote({ mode: 'delete', name, remotes: names });
+        });
+      })
+      .catch(err => showToast(String(err), true));
+  }, [activeRepo, t]);
+
   const handleDeleteBranch = async (branch: { name: string; isRemote?: boolean }, force = false) => {
     if (!isTauriEnvironment() || !activeRepo) {
       showToast(t('toast.previewNoWrite'), true);
@@ -845,11 +1028,7 @@ export function App() {
         busyLabel={busyLabel}
         operationsLocked={opsLocked}
         hasConflict={changes.some(c => c.status === 'conflict')}
-        onOpenMerge={() => {
-          setActiveTab('merge');
-          const first = changes.find(file => file.status === 'conflict');
-          if (first) void loadConflictFile(first.path);
-        }}
+        onOpenMerge={openConflictTab}
         onRollbackClick={() => {
           if (!activeRepo || changes.length === 0) {
             showToast(t('toast.nothingToRollback'), true);
@@ -877,6 +1056,17 @@ export function App() {
       />
 
       <main className="flex-1 flex flex-col overflow-hidden relative">
+        {/* 合并 / 变基 / 挑拣 / 还原停在半途时的继续与中止入口 */}
+        {activeRepo && (
+          <OperationBar
+            state={operationState}
+            busy={opsLocked}
+            onContinue={handleContinueOperation}
+            onAbort={handleAbortOperation}
+            onOpenMerge={openConflictTab}
+          />
+        )}
+
         {/* 冲突检测全局警示条 */}
         {activeRepo && changes.some(file => file.status === 'conflict') && activeTab !== 'merge' && (
           <div className="h-8 bg-amber-500/15 border-b border-amber-500/30 px-3 flex items-center justify-between text-xs text-amber-200 shrink-0 z-10">
@@ -887,11 +1077,7 @@ export function App() {
               </span>
             </div>
             <button
-              onClick={() => {
-                setActiveTab('merge');
-                const first = changes.find(file => file.status === 'conflict');
-                if (first) void loadConflictFile(first.path);
-              }}
+              onClick={openConflictTab}
               className="px-2.5 py-0.5 rounded bg-amber-500/30 hover:bg-amber-500/40 text-amber-200 border border-amber-500/50 font-medium transition-colors text-xs flex items-center space-x-1"
             >
               <GitMerge className="w-3 h-3 text-amber-300" />
@@ -937,12 +1123,23 @@ export function App() {
               onRebaseBranch={(name) => void run(t('toast.rebased'), () => rebaseOnto(activeRepo.path, name))}
               onCompareBranch={(name) => void openRevision(t('app.compareRange', { name, current: currentBranch }), `${name}..HEAD`, 'range')}
               onCreateBranch={(hash) => {
-                const name = prompt(t('toast.branchPrompt'), 'feature/');
-                if (name) void run(t('toast.branchCreated'), () => createBranch(activeRepo.path, name, hash));
+                void askInput({
+                  title: t('toast.branchPrompt'),
+                  defaultValue: 'feature/',
+                  confirmLabel: t('common.create'),
+                  tone: 'primary',
+                }).then(name => {
+                  if (!name) return;
+                  void run(t('toast.branchCreated'), () => createBranch(activeRepo.path, name, hash));
+                });
               }}
               onUpdateBranch={handleUpdateBranch}
               onPushBranch={openPush}
               onRenameBranch={(oldName, newName) => run(t('toast.renamed'), () => renameBranch(activeRepo.path, oldName, newName))}
+              onCreateTag={openTagDialog}
+              onPushTag={openTagPush}
+              onDeleteTag={handleDeleteTag}
+              onDeleteRemoteTag={handleDeleteRemoteTag}
             />
           )}
 
@@ -1025,8 +1222,15 @@ export function App() {
               onCompare={(name) => void openRevision(t('app.compareRange', { name, current: currentBranch }), `${name}..HEAD`, 'range')}
               onDelete={(branch, force) => { void handleDeleteBranch(branch, force); }}
               onRename={(branch) => {
-                const name = prompt(t('toast.renamePrompt'), branch.name);
-                if (name && name !== branch.name) void run(t('toast.renamed'), () => renameBranch(activeRepo.path, branch.name, name));
+                void askInput({
+                  title: t('toast.renamePrompt'),
+                  defaultValue: branch.name,
+                  confirmLabel: t('common.rename'),
+                  tone: 'primary',
+                }).then(name => {
+                  if (!name || name === branch.name) return;
+                  void run(t('toast.renamed'), () => renameBranch(activeRepo.path, branch.name, name));
+                });
               }}
               onToggleFavorite={(branch) => void run(branch.isFavorite ? t('toast.unfavorited') : t('toast.favorited'), async () => {
                 await toggleFavoriteBranch(activeRepo.path, branch.name);
@@ -1081,6 +1285,11 @@ export function App() {
               working={conflictWorking}
               loading={conflictLoading}
               sessionKey={String(conflictGen)}
+              operation={operationState?.operation ?? 'none'}
+              operationPending={operationState?.unmergedPaths.length ?? 0}
+              operationBusy={opsLocked}
+              onContinueOperation={handleContinueOperation}
+              onAbortOperation={handleAbortOperation}
               onSelectFile={(path) => { void loadConflictFile(path); }}
               onSave={(content) => {
                 if (!conflictPath) return;
@@ -1138,8 +1347,15 @@ export function App() {
         }}
         onDelete={(branch, force) => { void handleDeleteBranch(branch, force); }}
         onRename={(branch) => {
-          const name = prompt(t('toast.renamePrompt'), branch.name);
-          if (name && name !== branch.name) void run(t('toast.renamed'), () => renameBranch(activeRepo.path, branch.name, name));
+          void askInput({
+            title: t('toast.renamePrompt'),
+            defaultValue: branch.name,
+            confirmLabel: t('common.rename'),
+            tone: 'primary',
+          }).then(name => {
+            if (!name || name === branch.name) return;
+            void run(t('toast.renamed'), () => renameBranch(activeRepo.path, branch.name, name));
+          });
         }}
         onToggleFavorite={(branch) => void run(branch.isFavorite ? t('toast.unfavorited') : t('toast.favorited'), async () => {
           await toggleFavoriteBranch(activeRepo.path, branch.name);
@@ -1224,6 +1440,36 @@ export function App() {
           <span className="font-medium break-all">{toast.text}</span>
         </div>
       )}
+
+      <TagDialog
+        open={tagDraft !== null}
+        draft={tagDraft}
+        busy={tagBusy}
+        error={tagError}
+        onCancel={() => {
+          if (!tagBusy) setTagDraft(null);
+        }}
+        onConfirm={confirmCreateTag}
+      />
+
+      <RemotePickerDialog
+        open={tagRemote !== null}
+        title={tagRemote?.mode === 'delete' ? t('tag.deleteRemoteTitle') : t('tag.pushTitle')}
+        hint={tagRemote
+          ? (tagRemote.mode === 'delete'
+            ? t('tag.deleteRemoteHint', { name: tagRemote.name })
+            : t('tag.pushHint', { name: tagRemote.name }))
+          : ''}
+        confirmLabel={tagRemote?.mode === 'delete' ? t('tag.deleteRemote') : t('tag.push')}
+        tone={tagRemote?.mode === 'delete' ? 'danger' : 'primary'}
+        remotes={tagRemote?.remotes ?? []}
+        busy={tagBusy}
+        error={tagError}
+        onCancel={() => {
+          if (!tagBusy) setTagRemote(null);
+        }}
+        onConfirm={runTagRemote}
+      />
 
       <ConfirmDialog
         open={Boolean(pendingConfirm)}

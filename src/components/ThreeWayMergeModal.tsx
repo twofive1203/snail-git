@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { GitMerge, Save, X } from 'lucide-react';
+import { GitMerge, Play, RotateCcw, Save, X } from 'lucide-react';
 import { FilePathDisplay } from './common/FilePathDisplay';
 import { MergeViewer, type MergeViewerHandle, type MergeViewerStats } from './merge/MergeViewer';
 import { askConfirm } from './common/askConfirm';
@@ -20,6 +20,12 @@ interface ThreeWayMergeModalProps {
   working?: string;
   loading?: boolean;
   sessionKey?: string;
+  /** 当前中断状态：merge / rebase / cherry-pick / revert。none 时不显示底部动作条。 */
+  operation?: string;
+  operationPending?: number;
+  operationBusy?: boolean;
+  onContinueOperation?: () => void;
+  onAbortOperation?: () => void;
   onSelectFile: (path: string) => void;
   onSave: (content: string) => void;
   onClose: () => void;
@@ -36,6 +42,11 @@ export const ThreeWayMergeModal: React.FC<ThreeWayMergeModalProps> = ({
   working = '',
   loading = false,
   sessionKey = '',
+  operation = 'none',
+  operationPending = 0,
+  operationBusy = false,
+  onContinueOperation,
+  onAbortOperation,
   onSelectFile,
   onSave,
   onClose,
@@ -124,6 +135,37 @@ export const ThreeWayMergeModal: React.FC<ThreeWayMergeModalProps> = ({
             onSave={onSave}
             onStats={setStats}
           />
+        </div>
+      )}
+
+      {operation !== 'none' && (
+        <div className="h-10 px-4 border-t border-jb-border flex items-center justify-between gap-3 shrink-0 bg-jb-bg/60">
+          <span className={`text-xs truncate ${operationPending > 0 ? 'text-amber-300' : 'text-jb-text-secondary'}`}>
+            {operationPending > 0
+              ? t('app.operation.pending', { count: operationPending })
+              : t('app.operation.hint')}
+          </span>
+          <div className="flex items-center space-x-2 shrink-0">
+            <button
+              onClick={onContinueOperation}
+              disabled={operationBusy || operationPending > 0}
+              title={operationPending > 0
+                ? t('app.operation.pending', { count: operationPending })
+                : t('app.operation.continue')}
+              className="px-3 py-1.5 rounded bg-jb-blue hover:bg-jb-blueHover text-white font-medium flex items-center space-x-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Play className="w-3.5 h-3.5" />
+              <span>{t('app.operation.continue')}</span>
+            </button>
+            <button
+              onClick={onAbortOperation}
+              disabled={operationBusy}
+              className="px-3 py-1.5 rounded border border-rose-500/50 text-rose-300 hover:bg-rose-500/15 font-medium flex items-center space-x-1.5 disabled:opacity-40"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>{t('app.operation.abort')}</span>
+            </button>
+          </div>
         </div>
       )}
     </div>

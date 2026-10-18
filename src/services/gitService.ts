@@ -116,7 +116,11 @@ export interface GitProgress {
 }
 
 export interface SyncOutcome {
-  status: 'ok' | 'up_to_date' | 'needs_confirm' | 'cancelled' | 'blocked' | string;
+  /**
+   * needs_force：推送被非快进拒绝，且可以用 --force-with-lease 重试。
+   * 不能当成失败吞掉——前端据此放出强制推送开关。
+   */
+  status: 'ok' | 'up_to_date' | 'needs_confirm' | 'needs_force' | 'cancelled' | 'blocked' | string;
   message: string;
   ahead: number;
   behind: number;
@@ -187,6 +191,50 @@ export async function rebaseOnto(repoPath: string, name: string): Promise<string
   return invokeTauri<string>('rebase_onto', { repoPath, name });
 }
 
+/** 合并 / 变基 / 挑拣 / 还原的中断状态。none 表示没有进行中的操作。 */
+export type RepoOperation = 'none' | 'merge' | 'rebase' | 'cherry-pick' | 'revert';
+
+export interface RepoOperationState {
+  operation: RepoOperation | string;
+  unmergedPaths: string[];
+}
+
+/** 读取仓库当前是否停在合并、变基、挑拣或还原的中途。 */
+export async function repoState(repoPath: string): Promise<RepoOperationState> {
+  if (!isTauriEnvironment()) return { operation: 'none', unmergedPaths: [] };
+  return invokeTauri<RepoOperationState>('repo_state', { repoPath });
+}
+
+/** 继续被中断的操作。变基可能停在下一个冲突上，返回值里仍是 rebase。 */
+export async function continueOperation(repoPath: string): Promise<RepoOperationState> {
+  return invokeTauri<RepoOperationState>('continue_operation', { repoPath });
+}
+
+/** 中止被中断的操作，工作区恢复到操作前。 */
+export async function abortOperation(repoPath: string): Promise<RepoOperationState> {
+  return invokeTauri<RepoOperationState>('abort_operation', { repoPath });
+}
+
+/** 创建轻量（message 为空）或附注 tag。target 是提交 hash 或分支名。 */
+export async function createTag(repoPath: string, name: string, target: string, message?: string): Promise<string> {
+  return invokeTauri<string>('create_tag', { repoPath, name, target, ...(message ? { message } : {}) });
+}
+
+/** 只删本地 tag。 */
+export async function deleteTag(repoPath: string, name: string): Promise<string> {
+  return invokeTauri<string>('delete_tag', { repoPath, name });
+}
+
+/** 把 tag 推到指定远程。 */
+export async function pushTag(repoPath: string, name: string, remote: string): Promise<string> {
+  return invokeTauri<string>('push_tag', { repoPath, name, remote });
+}
+
+/** 删除远程 tag。破坏性，调用方必须先确认。 */
+export async function deleteRemoteTag(repoPath: string, name: string, remote: string): Promise<string> {
+  return invokeTauri<string>('delete_remote_tag', { repoPath, name, remote });
+}
+
 /** response: probe=首次尝试，stash=贮藏本地改动后重试，continue=旧调用保留的硬更新，abort=取消。界面不再提供 continue。 */
 export type UpdateResponse = 'probe' | 'stash' | 'continue' | 'abort';
 
@@ -212,6 +260,8 @@ export interface PushPreview {
   ahead: number;
   behind: number;
   truncated: boolean;
+  /** 两边都有独有提交：普通推送必被拒，需要 --force-with-lease。 */
+  needsForce?: boolean;
   commits: GitCommit[];
 }
 
@@ -220,6 +270,8 @@ export interface PushTarget {
   branch: string;
   setUpstream: boolean;
   source?: string;
+  /** 只用 --force-with-lease，绝不降级成 --force。 */
+  force?: boolean;
 }
 
 /** 只读本地远程跟踪引用，列出将要推送的提交。remote/branch 为空时由后端选默认目标。source 为空时源是当前分支。 */
@@ -238,6 +290,7 @@ export async function pushTo(
   branch: string,
   setUpstream: boolean,
   source?: string,
+  force = false,
 ): Promise<SyncOutcome> {
   return invokeTauri<SyncOutcome>('push_to', {
     repoPath,
@@ -245,6 +298,7 @@ export async function pushTo(
     branch,
     setUpstream,
     ...(source ? { source } : {}),
+    force,
   });
 }
 

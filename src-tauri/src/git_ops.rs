@@ -1634,6 +1634,161 @@ pub fn list_tags(repo: &str) -> Result<Vec<GitTagDto>, String> {
     Ok(tags)
 }
 
+/// tag 名比分支名更严：`~ ^ : ? * [ \` 与 `@{`、`..`、首尾 `-` 都被 git 拒绝，
+/// 但 git 只会报一句英文 `fatal: '<name>' is not a valid tag name`，所以先自己挡。
+fn validate_tag_name(name: &str) -> Result<(), String> {
+    let invalid = |reason: &str| Err(format!("无效的标签名 {name}：{reason}"));
+    if name.is_empty() {
+        return invalid("不能为空");
+    }
+    if name.starts_with('-') {
+        return invalid("不能以 - 开头");
+    }
+    if name.starts_with('/') || name.ends_with('/') || name.contains("//") {
+        return invalid("不能以 / 开头或结尾，也不能出现连续的 /");
+    }
+    if name.ends_with('.') {
+        return invalid("不能以 . 结尾");
+    }
+    if name.contains("..") {
+        return invalid("不能包含 ..");
+    }
+    if name.contains("@{") {
+        return invalid("不能包含 @{");
+    }
+    if name == "@" {
+        return invalid("不能只用 @");
+    }
+    if name.contains('\\') {
+        return invalid("不能包含反斜杠");
+    }
+    if let Some(ch) = name
+        .chars()
+        .find(|ch| matches!(ch, ' ' | '~' | '^' | ':' | '?' | '*' | '[' | '\u{7f}') || ch.is_control())
+    {
+        return invalid(&format!("不能包含 {ch}"));
+    }
+    Ok(())
+}
+
+fn tag_ref(name: &str) -> String {
+    format!("refs/tags/{name}")
+}
+
+fn tag_exists(top: &str, name: &str) -> bool {
+    ref_exists(top, &tag_ref(name))
+}
+
+/// 创建轻量或附注 tag。`target` 是提交 hash 或分支名，`message` 为空时创建轻量 tag。
+pub fn create_tag(repo: &str, name: &str, target: &str, message: &str) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    let target = target.trim();
+    validate_tag_name(name)?;
+    if target.is_empty() {
+        return Err("没有指定要打标签的提交".into());
+    }
+    validate_rev(target)?;
+    if tag_exists(&top, name) {
+        return Err(format!("标签 {name} 已存在，请换一个名字。"));
+    }
+    // 先确认 target 真能解析成一个提交，避免把非法 rev 交给 git 再翻译它的英文报错。
+    let commit = format!("{target}^{{commit}}");
+    if !ref_exists(&top, &commit) {
+        return Err(format!("找不到提交 {target}"));
+    }
+    let message = message.trim();
+    let timeout = Duration::from_secs(20);
+    if message.is_empty() {
+        let output = run_git(&top, &["tag", name, target], timeout)?;
+        ensure_ok(&output, "创建标签")?;
+        return Ok(format!("已创建轻量标签 {name}"));
+    }
+    // 附注 tag 需要作者身份；未配置时直接给中文提示，不透传 git 的英文原文。
+    if configured_user_name(&top).is_empty() {
+        return Err("创建附注标签需要先配置 user.name 和 user.email。".into());
+    }
+    let output = run_git(&top, &["tag", "-a", name, target, "-m", message], timeout)?;
+    ensure_ok(&output, "创建附注标签")?;
+    Ok(format!("已创建附注标签 {name}"))
+}
+
+/// 只删本地 tag，不动远程。
+pub fn delete_tag(repo: &str, name: &str) -> Result<String, String> {
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    validate_tag_name(name)?;
+    if !tag_exists(&top, name) {
+        return Err(format!("标签 {name} 不存在"));
+    }
+    let output = run_git(&top, &["tag", "-d", name], Duration::from_secs(20))?;
+    ensure_ok(&output, "删除标签")?;
+    Ok(format!("已删除本地标签 {name}"))
+}
+
+fn validate_tag_remote(top: &str, remote: &str) -> Result<String, String> {
+    let remote = remote.trim();
+    validate_remote_name(remote)?;
+    if !remotes(top)?.iter().any(|name| name == remote) {
+        return Err(format!("远程 {remote} 不存在"));
+    }
+    Ok(remote.to_string())
+}
+
+/// 把 tag 推到指定远程。tag 不是分支，不能用 `push_to` 的 `local:branch` refspec。
+pub fn push_tag(
+    repo: &str,
+    name: &str,
+    remote: &str,
+    on_progress: &mut dyn FnMut(&str),
+) -> Result<String, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    validate_tag_name(name)?;
+    if !tag_exists(&top, name) {
+        return Err(format!("标签 {name} 不存在"));
+    }
+    let remote = validate_tag_remote(&top, remote)?;
+    let refspec = tag_ref(name);
+    on_progress("正在连接远程，若弹出登录窗口请完成登录");
+    let output = run_git_streaming(
+        &top,
+        &["push", "--progress", &remote, &refspec],
+        NETWORK_TIMEOUT,
+        Some(NETWORK_STALL),
+        on_progress,
+    )?;
+    let text = finish_network(&output, "推送标签")?;
+    Ok(command_summary_text(&text, &format!("已推送标签 {name} 到 {remote}")))
+}
+
+/// 删除远程 tag。破坏性，前端必须二次确认。
+pub fn delete_remote_tag(
+    repo: &str,
+    name: &str,
+    remote: &str,
+    on_progress: &mut dyn FnMut(&str),
+) -> Result<String, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let name = name.trim();
+    validate_tag_name(name)?;
+    let remote = validate_tag_remote(&top, remote)?;
+    on_progress("正在连接远程，若弹出登录窗口请完成登录");
+    // 冒号前缀表示删除远程引用，参数仍是数组，不拼 shell 字符串。
+    let refspec = format!(":{}", tag_ref(name));
+    let output = run_git_streaming(
+        &top,
+        &["push", "--progress", &remote, &refspec],
+        NETWORK_TIMEOUT,
+        Some(NETWORK_STALL),
+        on_progress,
+    )?;
+    let text = finish_network(&output, "删除远程标签")?;
+    Ok(command_summary_text(&text, &format!("已删除 {remote} 上的标签 {name}")))
+}
+
 pub fn list_stashes(repo: &str) -> Result<Vec<StashItemDto>, String> {
     let output = run_git(
         repo,
@@ -2863,6 +3018,134 @@ fn commit_pending_merge(top: &str) -> Result<&'static str, String> {
     Ok("merge")
 }
 
+/// 三方合并 / 变基 / 挑拣 / 还原的中断状态。
+/// `operation` 取 none / merge / rebase / cherry-pick / revert，前端据此决定是否显示动作条。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoOperationState {
+    pub operation: String,
+    /// 还有冲突没标记为已解决时，继续会被 git 拒绝，前端据此禁用按钮。
+    pub unmerged_paths: Vec<String>,
+}
+
+impl RepoOperationState {
+    fn idle() -> Self {
+        RepoOperationState { operation: "none".into(), unmerged_paths: Vec::new() }
+    }
+}
+
+/// 判断顺序与 git 自身一致：变基进行中时 MERGE_HEAD 也可能存在，先判变基。
+fn detect_operation(top: &str) -> &'static str {
+    if rebase_in_progress(top) {
+        "rebase"
+    } else if git_path_exists(top, "MERGE_HEAD") {
+        "merge"
+    } else if git_path_exists(top, "CHERRY_PICK_HEAD") {
+        "cherry-pick"
+    } else if git_path_exists(top, "REVERT_HEAD") {
+        "revert"
+    } else {
+        "none"
+    }
+}
+
+fn operation_state(top: &str) -> RepoOperationState {
+    let operation = detect_operation(top);
+    if operation == "none" {
+        return RepoOperationState::idle();
+    }
+    RepoOperationState {
+        operation: operation.into(),
+        unmerged_paths: unmerged_paths(top),
+    }
+}
+
+pub fn repo_state(repo: &str) -> Result<RepoOperationState, String> {
+    let top = validate_repo(repo)?;
+    Ok(operation_state(&top))
+}
+
+/// 继续类命令都会走到 `git commit`，默认会拉起编辑器，在无窗口进程里会挂死。
+/// `GIT_EDITOR=true` 让 git 直接接受默认提交信息；`false` 会直接失败。
+const NO_EDITOR: [(&str, &str); 2] = [("GIT_EDITOR", "true"), ("GIT_SEQUENCE_EDITOR", "true")];
+
+fn no_operation_error(operation: &str) -> String {
+    if operation == "none" {
+        "当前没有进行中的合并、变基、挑拣或还原。".into()
+    } else {
+        format!("当前进行中的操作是 {operation}，不支持该动作。")
+    }
+}
+
+/// 继续被中断的合并 / 变基 / 挑拣 / 还原。
+/// 返回继续之后重新探测到的状态：变基可能停在下一个冲突上，这不算失败。
+pub fn continue_operation(repo: &str) -> Result<RepoOperationState, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let operation = detect_operation(&top);
+    let conflicts = unmerged_paths(&top);
+    if !conflicts.is_empty() {
+        return Err(format!("还有 {} 个文件没有标记为已解决，无法继续：{}。", conflicts.len(), join_limited(&conflicts)));
+    }
+    let timeout = Duration::from_secs(60);
+    match operation {
+        "merge" => {
+            // 复用已有实现：MERGE_HEAD 存在才提交，快进/已是最新不会多出提交。
+            commit_pending_merge(&top)?;
+        }
+        "rebase" => {
+            let output = run_git_with_env(&top, &["rebase", "--continue"], &NO_EDITOR, timeout)?;
+            // 变基停在下一个冲突上时退出码非 0，但状态仍是 rebasing，交给前端继续提示。
+            if !output.status.success() && !rebase_in_progress(&top) {
+                return Err(ensure_ok(&output, "继续变基").unwrap_err());
+            }
+        }
+        "cherry-pick" => {
+            let output = run_git_with_env(&top, &["cherry-pick", "--continue"], &NO_EDITOR, timeout)?;
+            ensure_ok(&output, "继续挑拣")?;
+        }
+        "revert" => {
+            let output = run_git_with_env(&top, &["revert", "--continue"], &NO_EDITOR, timeout)?;
+            ensure_ok(&output, "继续还原")?;
+        }
+        other => return Err(no_operation_error(other)),
+    }
+    Ok(operation_state(&top))
+}
+
+/// 中止被中断的操作，把工作区恢复到操作前。返回中止后重新探测到的状态。
+pub fn abort_operation(repo: &str) -> Result<RepoOperationState, String> {
+    let _pause = WatchPauseGuard::new();
+    let top = validate_repo(repo)?;
+    let operation = detect_operation(&top);
+    let timeout = Duration::from_secs(60);
+    match operation {
+        "merge" => {
+            let output = run_git(&top, &["merge", "--abort"], timeout)?;
+            ensure_ok(&output, "中止合并")?;
+        }
+        "rebase" => {
+            let output = run_git(&top, &["rebase", "--abort"], timeout)?;
+            ensure_ok(&output, "中止变基")?;
+        }
+        "cherry-pick" => {
+            let output = run_git(&top, &["cherry-pick", "--abort"], timeout)?;
+            ensure_ok(&output, "中止挑拣")?;
+        }
+        "revert" => {
+            let output = run_git(&top, &["revert", "--abort"], timeout)?;
+            ensure_ok(&output, "中止还原")?;
+        }
+        other => return Err(no_operation_error(other)),
+    }
+    // 中止后重新探测：中间目录若没清干净，前端仍要看到真实状态而不是乐观的 none。
+    let after = operation_state(&top);
+    if after.operation != "none" {
+        return Err(format!("中止{}后仓库仍处于 {} 状态，请检查 .git 目录。", operation, after.operation));
+    }
+    Ok(after)
+}
+
 fn describe_conflict(paths: &[String]) -> String {
     if paths.is_empty() {
         "远程更新与本地改动存在真实冲突。".to_string()
@@ -3300,6 +3583,9 @@ pub struct PushPreview {
     pub ahead: u32,
     pub behind: u32,
     pub truncated: bool,
+    /// 普通推送一定会被拒（远程有本地没有的提交，且两边已分叉）。
+    /// 前端据此提前放出强制推送开关，而不是等推送失败。
+    pub needs_force: bool,
     pub commits: Vec<GitCommitDto>,
 }
 
@@ -3642,6 +3928,9 @@ pub fn preview_push(
         log_range_commits(&top, &rev_args)?
     };
     let remote_branches = list_remote_branch_names(&top, &remote);
+    // 两边都有独有提交时普通推送必被拒（非快进）。只落后（behind>0 且 ahead==0）应该提示先更新，
+    // 那里没有要推的东西，不该把强制推送当成解决方案。
+    let needs_force = target_exists && ahead > 0 && behind > 0;
     Ok(PushPreview {
         local_branch: local,
         will_set_upstream: up_remote != remote || up_branch != target,
@@ -3654,10 +3943,21 @@ pub fn preview_push(
         ahead,
         behind,
         truncated,
+        needs_force,
         commits,
         remote,
         target_branch: target,
     })
+}
+
+/// 被远程拒绝时，判断是不是「需要强制推送」。不解析英文报错之外的语义：
+/// 只要命中非快进类拒绕，就交回一个可识别的状态而不是当普通失败吞掉。
+fn push_rejected_detail(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("non-fast-forward")
+        || lower.contains("[rejected]")
+        || lower.contains("fetch first")
+        || lower.contains("failed to push some refs")
 }
 
 pub fn push_to(
@@ -3666,6 +3966,7 @@ pub fn push_to(
     branch: &str,
     set_upstream: bool,
     source: Option<&str>,
+    force: bool,
     on_progress: &mut dyn FnMut(&str),
 ) -> Result<SyncOutcome, String> {
     let _pause = WatchPauseGuard::new();
@@ -3684,11 +3985,50 @@ pub fn push_to(
     if set_upstream {
         args.push("--set-upstream".to_string());
     }
+    if force {
+        // 只用 --force-with-lease：远程被别人推进时自动失败，不静默覆盖别人的提交。
+        // 不自动降级成 --force，lease 过期就报错让用户先获取。
+        args.push("--force-with-lease".to_string());
+    }
     args.push(remote.to_string());
     args.push(refspec);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     on_progress("正在连接远程，若弹出登录窗口请完成登录");
     let output = run_git_streaming(&top, &refs, NETWORK_TIMEOUT, Some(NETWORK_STALL), on_progress)?;
+    if !output.status.success() {
+        let detail = {
+            let err = lossy(&output.stderr);
+            if err.trim().is_empty() { lossy(&output.stdout) } else { err }
+        };
+        // 已勾选强制推送仍失败：可能是 lease 过期，也可能是其他原因。
+        // 带 lease 的推送被拒时绝不能自动重试成 --force。
+        if force && push_rejected_detail(&detail) {
+            let (ahead, behind) = ahead_behind(&top);
+            return Ok(sync_outcome(
+                "needs_force",
+                format!(
+                    "强制推送被拒绝。本地记录的远程状态已过期（别人推送过），请先获取远程再重试。\n{detail}"
+                ),
+                ahead,
+                behind,
+                remote,
+                branch,
+                Vec::new(),
+            ));
+        }
+        if !force && push_rejected_detail(&detail) {
+            let (ahead, behind) = ahead_behind(&top);
+            return Ok(sync_outcome(
+                "needs_force",
+                format!("远程有本地没有的提交，普通推送被拒绝。确实要覆盖远程历史时请勾选强制推送。\n{detail}"),
+                ahead,
+                behind,
+                remote,
+                branch,
+                Vec::new(),
+            ));
+        }
+    }
     let text = finish_network(&output, "推送")?;
     // 计数始终描述当前 HEAD，避免推送其他分支时改写状态栏。
     let (ahead, behind) = ahead_behind(&top);
@@ -6169,7 +6509,7 @@ mod tests {
         assert!(!custom.target_exists);
         assert!(custom.will_set_upstream);
 
-        let pushed = push_to(&local_s, "origin", "feature", true, None, &mut |_| {}).unwrap();
+        let pushed = push_to(&local_s, "origin", "feature", true, None, false, &mut |_| {}).unwrap();
         assert_eq!(pushed.status, "ok", "{}", pushed.message);
         assert_eq!(upstream_ref(&local_s).as_deref(), Some("origin/feature"));
         let (branch, _) = current_branch(&local_s).unwrap();
@@ -6184,8 +6524,8 @@ mod tests {
         assert!(!tracked.will_set_upstream);
 
         let feature_ref = run_git(&local_s, &["rev-parse", "refs/remotes/origin/feature"], Duration::from_secs(8)).unwrap();
-        assert!(push_to(&local_s, "origin", "bad:name", false, None, &mut |_| {}).is_err());
-        assert!(push_to(&local_s, "elsewhere", "main", false, None, &mut |_| {}).is_err());
+        assert!(push_to(&local_s, "origin", "bad:name", false, None, false, &mut |_| {}).is_err());
+        assert!(push_to(&local_s, "elsewhere", "main", false, None, false, &mut |_| {}).is_err());
         let feature_after = run_git(&local_s, &["rev-parse", "refs/remotes/origin/feature"], Duration::from_secs(8)).unwrap();
         assert_eq!(lossy(&feature_ref.stdout), lossy(&feature_after.stdout));
 
@@ -6491,7 +6831,7 @@ mod tests {
         assert_eq!(head_only.local_branch, "main");
         assert!(!head_only.commits.iter().any(|commit| commit.subject == "feature-only"));
 
-        let pushed = push_to(&local_s, "origin", "feature", true, Some("feature"), &mut |_| {}).unwrap();
+        let pushed = push_to(&local_s, "origin", "feature", true, Some("feature"), false, &mut |_| {}).unwrap();
         assert_eq!(pushed.status, "ok", "{}", pushed.message);
         let (branch, _) = current_branch(&local_s).unwrap();
         assert_eq!(branch, "main");
@@ -6510,6 +6850,146 @@ mod tests {
         let detached = preview_push(&local_s, None, None, Some("feature")).unwrap();
         assert_eq!(detached.local_branch, "feature");
         assert!(preview_push(&local_s, None, None, None).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 搭一个「本地已推送、远程已被别人推进」的分叉仓库。
+    /// 返回（根目录, bare 路径, 本地路径, 另一个人克隆的路径）。
+    fn diverged_remote(prefix: &str) -> (PathBuf, String, String, String) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("{prefix}-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("local");
+        let other = root.join("other");
+        let bare_s = bare.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        let other_s = other.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+        git_ok(&root_s, &["init", "--bare", "-b", "main", &bare_s]);
+        init_repo(&local);
+        fs::write(local.join("a.txt"), "v1\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "init"]);
+        git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
+        git_ok(&local_s, &["push", "-u", "origin", "main"]);
+
+        // 另一个人推了一条本地没有的提交。
+        git_ok(&root_s, &["clone", &bare_s, &other_s]);
+        git_ok(&other_s, &["config", "user.email", "other@snailgit.local"]);
+        git_ok(&other_s, &["config", "user.name", "Other"]);
+        fs::write(other.join("b.txt"), "remote\n").unwrap();
+        git_ok(&other_s, &["add", "b.txt"]);
+        git_ok(&other_s, &["commit", "-m", "theirs"]);
+        git_ok(&other_s, &["push", "origin", "main"]);
+
+        // 本地不 fetch，直接改写已推送的提交：squash 后的典型场景。
+        fs::write(local.join("a.txt"), "v2\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "--amend", "-m", "rewritten"]);
+        (root, bare_s, local_s, other_s)
+    }
+
+    #[test]
+    fn preview_flags_needs_force_only_when_both_sides_diverged() {
+        let (root, _bare, local_s, _other) = diverged_remote("snail-git-force-preview");
+        // 本地跟踪已过期：看不到远程新提交，但 fetch 后就能判定分叉。
+        git_ok(&local_s, &["fetch", "origin"]);
+        let preview = preview_push(&local_s, None, None, None).unwrap();
+        assert!(preview.target_exists);
+        assert!(preview.ahead > 0 && preview.behind > 0, "ahead={} behind={}", preview.ahead, preview.behind);
+        assert!(preview.needs_force, "两边分叉时预览应当标记需要强制推送");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn push_reports_needs_force_and_force_with_lease_succeeds() {
+        let (root, bare_s, local_s, _other) = diverged_remote("snail-git-force-push");
+        git_ok(&local_s, &["fetch", "origin"]);
+        let before = run_git(&bare_s, &["rev-parse", "refs/heads/main"], Duration::from_secs(8)).unwrap();
+
+        // 不传 force：普通推送必须被拒，且返回可识别的 needs_force 而不是直接报错。
+        let refused = push_to(&local_s, "origin", "main", false, None, false, &mut |_| {}).unwrap();
+        assert_eq!(refused.status, "needs_force", "{}", refused.message);
+        let untouched = run_git(&bare_s, &["rev-parse", "refs/heads/main"], Duration::from_secs(8)).unwrap();
+        assert_eq!(lossy(&before.stdout), lossy(&untouched.stdout), "被拒时远程不能变");
+
+        // 带 force：--force-with-lease 放行（本地刚 fetch 过，lease 仍有效）。
+        let forced = push_to(&local_s, "origin", "main", false, None, true, &mut |_| {}).unwrap();
+        assert_eq!(forced.status, "ok", "{}", forced.message);
+        let after = run_git(&bare_s, &["rev-parse", "refs/heads/main"], Duration::from_secs(8)).unwrap();
+        assert_ne!(lossy(&before.stdout), lossy(&after.stdout), "强制推送应当改写远程历史");
+        let local_head = run_git(&local_s, &["rev-parse", "HEAD"], Duration::from_secs(8)).unwrap();
+        assert_eq!(lossy(&local_head.stdout), lossy(&after.stdout));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 关键安全断言：lease 过期时拒绝，且**不**自动降级成 --force 覆盖别人的提交。
+    #[test]
+    fn force_with_stale_lease_refuses_instead_of_overwriting() {
+        let (root, bare_s, local_s, _other) = diverged_remote("snail-git-force-lease");
+        git_ok(&local_s, &["fetch", "origin"]);
+        let after_fetch = run_git(&bare_s, &["rev-parse", "refs/heads/main"], Duration::from_secs(8)).unwrap();
+
+        // 第三人再推一次，本地 tracking 就过期了。
+        let third = root.join("third");
+        let third_s = third.to_string_lossy().to_string();
+        git_ok(&root.to_string_lossy(), &["clone", &bare_s, &third_s]);
+        git_ok(&third_s, &["config", "user.email", "third@snailgit.local"]);
+        git_ok(&third_s, &["config", "user.name", "Third"]);
+        fs::write(third.join("c.txt"), "third\n").unwrap();
+        git_ok(&third_s, &["add", "c.txt"]);
+        git_ok(&third_s, &["commit", "-m", "third"]);
+        git_ok(&third_s, &["push", "origin", "main"]);
+        let before_force = run_git(&bare_s, &["rev-parse", "refs/heads/main"], Duration::from_secs(8)).unwrap();
+        assert_ne!(lossy(&after_fetch.stdout), lossy(&before_force.stdout));
+
+        let stale = push_to(&local_s, "origin", "main", false, None, true, &mut |_| {}).unwrap();
+        assert_eq!(stale.status, "needs_force", "{}", stale.message);
+        assert!(stale.message.contains("获取"), "应当提示先获取远程：{}", stale.message);
+        let untouched = run_git(&bare_s, &["rev-parse", "refs/heads/main"], Duration::from_secs(8)).unwrap();
+        assert_eq!(
+            lossy(&before_force.stdout),
+            lossy(&untouched.stdout),
+            "lease 过期时绝不能覆盖别人的提交"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn force_push_still_works_for_fast_forward() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("snail-git-force-ff-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("local");
+        let bare_s = bare.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+        git_ok(&root_s, &["init", "--bare", "-b", "main", &bare_s]);
+        init_repo(&local);
+        fs::write(local.join("a.txt"), "v1\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "init"]);
+        git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
+        git_ok(&local_s, &["push", "-u", "origin", "main"]);
+        fs::write(local.join("b.txt"), "v2\n").unwrap();
+        git_ok(&local_s, &["add", "b.txt"]);
+        git_ok(&local_s, &["commit", "-m", "second"]);
+
+        let pushed = push_to(&local_s, "origin", "main", false, None, true, &mut |_| {}).unwrap();
+        assert_eq!(pushed.status, "ok", "{}", pushed.message);
+        let preview = preview_push(&local_s, None, None, None).unwrap();
+        assert!(!preview.needs_force, "快进推送后不应再要求强制");
+        assert_eq!(preview.ahead, 0);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6847,6 +7327,291 @@ mod tests {
         assert!(!rebase_in_progress(&path));
         assert_eq!(current_branch(&path).unwrap().0, "main");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 两边各改同一行：制造确定的合并冲突，返回（仓库目录, 仓库路径）。
+    fn conflict_repo(prefix: &str) -> (PathBuf, String) {
+        let (dir, path) = squash_repo(prefix);
+        commit_file(&dir, &path, "a.txt", "base\n", "base");
+        git_ok(&path, &["checkout", "-b", "other"]);
+        commit_file(&dir, &path, "a.txt", "other\n", "other edit");
+        git_ok(&path, &["checkout", "main"]);
+        commit_file(&dir, &path, "a.txt", "main\n", "main edit");
+        (dir, path)
+    }
+
+    fn operation_porcelain(path: &str) -> String {
+        let output = run_git(path, &["status", "--porcelain"], Duration::from_secs(10)).unwrap();
+        lossy(&output.stdout).replace('\r', "")
+    }
+
+    #[test]
+    fn repo_state_reports_none_on_a_clean_repo() {
+        let (dir, path) = squash_repo("snail-git-state-clean");
+        commit_file(&dir, &path, "a.txt", "v1\n", "v1");
+        let state = repo_state(&path).unwrap();
+        assert_eq!(state.operation, "none");
+        assert!(state.unmerged_paths.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_conflict_continues_into_a_merge_commit() {
+        let (dir, path) = conflict_repo("snail-git-op-merge");
+        let merged = run_git(&path, &["merge", "--no-edit", "other"], Duration::from_secs(20)).unwrap();
+        assert!(!merged.status.success(), "两边改同一行必须冲突");
+
+        let state = repo_state(&path).unwrap();
+        assert_eq!(state.operation, "merge");
+        assert_eq!(state.unmerged_paths, vec!["a.txt".to_string()]);
+
+        // 还有冲突时继续必须报错，且不能破坏中间状态。
+        let refused = continue_operation(&path).unwrap_err();
+        assert!(refused.contains("没有标记为已解决"), "{refused}");
+        assert!(dir.join(".git").join("MERGE_HEAD").exists());
+
+        fs::write(dir.join("a.txt"), "resolved\n").unwrap();
+        git_ok(&path, &["add", "a.txt"]);
+        let done = continue_operation(&path).unwrap();
+        assert_eq!(done.operation, "none");
+        assert!(done.unmerged_paths.is_empty());
+        assert!(!dir.join(".git").join("MERGE_HEAD").exists());
+        let log = run_git(&path, &["log", "-1", "--format=%p"], Duration::from_secs(8)).unwrap();
+        assert_eq!(lossy(&log.stdout).split_whitespace().count(), 2, "合并应产生双父提交");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_abort_restores_the_worktree() {
+        let (dir, path) = conflict_repo("snail-git-op-merge-abort");
+        let before = head_hash(&path);
+        let merged = run_git(&path, &["merge", "--no-edit", "other"], Duration::from_secs(20)).unwrap();
+        assert!(!merged.status.success());
+        assert_eq!(repo_state(&path).unwrap().operation, "merge");
+
+        let after = abort_operation(&path).unwrap();
+        assert_eq!(after.operation, "none");
+        assert!(!dir.join(".git").join("MERGE_HEAD").exists());
+        assert_eq!(head_hash(&path), before, "中止后 HEAD 必须回到合并前");
+        assert_eq!(operation_porcelain(&path), "", "中止后工作区应当是干净的");
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap().replace('\r', ""), "main\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rebase_conflict_continues_without_an_editor() {
+        let (dir, path) = conflict_repo("snail-git-op-rebase");
+        let rebased = run_git(&path, &["rebase", "other"], Duration::from_secs(20)).unwrap();
+        assert!(!rebased.status.success(), "变基必须停在冲突上");
+        assert_eq!(repo_state(&path).unwrap().operation, "rebase");
+
+        fs::write(dir.join("a.txt"), "resolved\n").unwrap();
+        git_ok(&path, &["add", "a.txt"]);
+        // 无 TTY 环境：若误开编辑器，run_git 会在超时后报错，这里就能暴露。
+        let done = continue_operation(&path).unwrap();
+        assert_eq!(done.operation, "none");
+        assert!(!rebase_in_progress(&path));
+        let subjects = log_subjects(&path);
+        assert_eq!(subjects, vec!["main edit", "other edit", "base"], "{subjects:?}");
+        assert_eq!(current_branch(&path).unwrap().0, "main");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rebase_abort_restores_the_original_branch() {
+        let (dir, path) = conflict_repo("snail-git-op-rebase-abort");
+        let before = head_hash(&path);
+        let rebased = run_git(&path, &["rebase", "other"], Duration::from_secs(20)).unwrap();
+        assert!(!rebased.status.success());
+
+        let after = abort_operation(&path).unwrap();
+        assert_eq!(after.operation, "none");
+        assert!(!rebase_in_progress(&path));
+        assert_eq!(head_hash(&path), before);
+        assert_eq!(operation_porcelain(&path), "");
+        assert_eq!(current_branch(&path).unwrap().0, "main");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cherry_pick_conflict_continues_and_aborts() {
+        let (dir, path) = conflict_repo("snail-git-op-cherry");
+        let picked = run_git(&path, &["cherry-pick", "other"], Duration::from_secs(20)).unwrap();
+        assert!(!picked.status.success());
+        let state = repo_state(&path).unwrap();
+        assert_eq!(state.operation, "cherry-pick");
+        assert_eq!(state.unmerged_paths, vec!["a.txt".to_string()]);
+
+        let aborted = abort_operation(&path).unwrap();
+        assert_eq!(aborted.operation, "none");
+        assert_eq!(operation_porcelain(&path), "");
+
+        let picked = run_git(&path, &["cherry-pick", "other"], Duration::from_secs(20)).unwrap();
+        assert!(!picked.status.success());
+        fs::write(dir.join("a.txt"), "resolved\n").unwrap();
+        git_ok(&path, &["add", "a.txt"]);
+        let done = continue_operation(&path).unwrap();
+        assert_eq!(done.operation, "none");
+        assert_eq!(log_subjects(&path)[0], "other edit");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revert_conflict_can_be_aborted() {
+        let (dir, path) = conflict_repo("snail-git-op-revert");
+        let reverted = run_git(&path, &["revert", "--no-edit", "other"], Duration::from_secs(20)).unwrap();
+        assert!(!reverted.status.success(), "还原必须停在冲突上");
+        let state = repo_state(&path).unwrap();
+        assert_eq!(state.operation, "revert");
+
+        let aborted = abort_operation(&path).unwrap();
+        assert_eq!(aborted.operation, "none");
+        assert!(!dir.join(".git").join("REVERT_HEAD").exists());
+        assert_eq!(operation_porcelain(&path), "");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn continue_and_abort_refuse_without_an_operation() {
+        let (dir, path) = squash_repo("snail-git-op-idle");
+        commit_file(&dir, &path, "a.txt", "v1\n", "v1");
+        let before = head_hash(&path);
+        let state = repo_state(&path).unwrap();
+        assert_eq!(state.operation, "none");
+        assert!(state.unmerged_paths.is_empty());
+
+        let cont = continue_operation(&path).unwrap_err();
+        assert!(cont.contains("没有进行中的"), "{cont}");
+        let abort = abort_operation(&path).unwrap_err();
+        assert!(abort.contains("没有进行中的"), "{abort}");
+        assert_eq!(head_hash(&path), before, "无中断状态时不能动 HEAD");
+        assert_eq!(operation_porcelain(&path), "");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tag_name_validation_rejects_git_reserved_characters() {
+        for name in ["v1.0.0", "release/2026.10", "a.b-c_d"] {
+            assert!(validate_tag_name(name).is_ok(), "{name} 应当合法");
+        }
+        for name in [
+            "", "-v1", "v 1", "v1~1", "v1^1", "v1:1", "v1?", "v1*", "v1[1]", "v1..2", "v1@{1}",
+            "v1/", "/v1", "v1//2", "v1.", "@", "v1\\2", "v1\u{7f}",
+        ] {
+            assert!(validate_tag_name(name).is_err(), "{name} 应当被拒绝");
+        }
+    }
+
+    #[test]
+    fn create_tag_makes_lightweight_and_annotated_tags() {
+        let (dir, path) = squash_repo("snail-git-tag-create");
+        commit_file(&dir, &path, "a.txt", "v1\n", "v1");
+        let head = head_hash(&path);
+        commit_file(&dir, &path, "b.txt", "v2\n", "v2");
+
+        create_tag(&path, "v1.0.0", &head, "").unwrap();
+        let tags = list_tags(&path).unwrap();
+        let light = tags.iter().find(|tag| tag.name == "v1.0.0").expect("轻量标签应当存在");
+        assert_eq!(light.hash, head[..7.min(head.len())].to_string(), "轻量标签指向指定提交");
+        assert_eq!(light.subject, "v1", "轻量标签的 subject 来自被指向的提交");
+
+        create_tag(&path, "v2.0.0", "HEAD", "release notes").unwrap();
+        let tags = list_tags(&path).unwrap();
+        let annotated = tags.iter().find(|tag| tag.name == "v2.0.0").expect("附注标签应当存在");
+        assert_eq!(annotated.subject, "release notes");
+        assert_eq!(annotated.hash, head_hash(&path)[..7].to_string(), "附注标签的 hash 是解引用后的提交");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_tag_refuses_duplicates_and_bad_input() {
+        let (dir, path) = squash_repo("snail-git-tag-guard");
+        commit_file(&dir, &path, "a.txt", "v1\n", "v1");
+        let head = head_hash(&path);
+        create_tag(&path, "v1", &head, "").unwrap();
+
+        // 同名不静默覆盖：原 tag 必须还在。
+        let dup = create_tag(&path, "v1", &head, "another").unwrap_err();
+        assert!(dup.contains("已存在"), "{dup}");
+        assert_eq!(list_tags(&path).unwrap().len(), 1);
+
+        // 非法名、非法目标都不能落到 git。
+        assert!(create_tag(&path, "bad name", &head, "").is_err());
+        assert!(create_tag(&path, "ok", "no-such-rev", "").is_err());
+        assert!(create_tag(&path, "ok2", "", "").is_err());
+        assert_eq!(list_tags(&path).unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn annotated_tag_requires_a_configured_user() {
+        let (dir, path) = squash_repo("snail-git-tag-no-user");
+        commit_file(&dir, &path, "a.txt", "v1\n", "v1");
+        // 清空本地身份，盖掉可能的全局配置；空字符串同样视为未配置。
+        git_ok(&path, &["config", "user.name", ""]);
+        git_ok(&path, &["config", "user.email", ""]);
+        assert!(configured_user_name(&path).is_empty());
+
+        let err = create_tag(&path, "v1", "HEAD", "notes").unwrap_err();
+        assert!(err.contains("user.name"), "应当给中文前置提示，而不是透传 git 英文：{err}");
+        assert!(list_tags(&path).unwrap().is_empty(), "失败时不能留下半成品 ref");
+        // 轻量 tag 不需要作者身份。
+        create_tag(&path, "v1-light", "HEAD", "").unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_tag_only_touches_the_named_local_tag() {
+        let (dir, path) = squash_repo("snail-git-tag-delete");
+        commit_file(&dir, &path, "a.txt", "v1\n", "v1");
+        create_tag(&path, "keep", "HEAD", "").unwrap();
+        create_tag(&path, "drop", "HEAD", "").unwrap();
+
+        delete_tag(&path, "drop").unwrap();
+        let names: Vec<String> = list_tags(&path).unwrap().into_iter().map(|tag| tag.name).collect();
+        assert_eq!(names, vec!["keep".to_string()]);
+
+        let missing = delete_tag(&path, "drop").unwrap_err();
+        assert!(missing.contains("不存在"), "{missing}");
+        assert_eq!(list_tags(&path).unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn push_and_delete_remote_tag_round_trip() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("snail-git-tag-remote-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("local");
+        let bare_s = bare.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+        git_ok(&root_s, &["init", "--bare", "-b", "main", &bare_s]);
+        init_repo(&local);
+        fs::write(local.join("a.txt"), "v1\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "init"]);
+        git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
+
+        create_tag(&local_s, "v1.0.0", "HEAD", "").unwrap();
+        push_tag(&local_s, "v1.0.0", "origin", &mut |_| {}).unwrap();
+        let remote_tag = run_git(&bare_s, &["rev-parse", "refs/tags/v1.0.0"], Duration::from_secs(8)).unwrap();
+        assert!(remote_tag.status.success(), "远程应当出现该 tag ref");
+
+        delete_remote_tag(&local_s, "v1.0.0", "origin", &mut |_| {}).unwrap();
+        let gone = run_git(&bare_s, &["rev-parse", "--verify", "refs/tags/v1.0.0"], Duration::from_secs(8)).unwrap();
+        assert!(!gone.status.success(), "远程 tag 应当被删除");
+        assert_eq!(list_tags(&local_s).unwrap().len(), 1, "删除远程 tag 不能动本地 tag");
+
+        // 参数校验先于网络：不存在的远程、不存在的标签都不该发请求。
+        assert!(push_tag(&local_s, "v1.0.0", "elsewhere", &mut |_| {}).is_err());
+        assert!(push_tag(&local_s, "nope", "origin", &mut |_| {}).is_err());
+        let _ = fs::remove_dir_all(&root);
     }
 }
 

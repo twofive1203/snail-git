@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { AddProjectModal } from './AddProjectModal';
 import { askConfirm } from '../common/askConfirm';
+import { askInput } from '../common/askInput';
 import { useI18n } from '../../i18n/react';
 
 export type SidebarTab = 'repos' | 'branches' | 'shelf';
@@ -358,8 +359,14 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   <div className="flex items-center space-x-1">
                     <button
                       onClick={() => {
-                        const name = prompt(t('branches.newPrompt'), 'feature/');
-                        if (name) onCreateBranch?.(name);
+                        void askInput({
+                          title: t('branches.newPrompt'),
+                          defaultValue: 'feature/',
+                          confirmLabel: t('common.create'),
+                          tone: 'primary',
+                        }).then(name => {
+                          if (name) onCreateBranch?.(name);
+                        });
                       }}
                       title={t('project.newBranch')}
                       className="p-1 rounded hover:bg-[#35373C] text-[#9DA0A8] hover:text-[#DFE1E5]"

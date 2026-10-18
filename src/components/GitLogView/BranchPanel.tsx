@@ -6,6 +6,7 @@ import {
   ChevronRight,
   FolderGit2,
   GitBranch as BranchIcon,
+  Plus,
   Search,
   Star,
   Tag,
@@ -29,6 +30,10 @@ interface BranchPanelProps {
   onUpdate?: (name: string) => void;
   onPush?: (name: string) => void;
   onRename?: (name: string) => void;
+  onCreateTag?: (target: string, targetLabel: string) => void;
+  onPushTag?: (name: string) => void;
+  onDeleteTag?: (name: string) => void;
+  onDeleteRemoteTag?: (name: string) => void;
 }
 
 interface RemoteGroup {
@@ -44,6 +49,8 @@ interface MenuState {
   checkoutName: string;
   isCurrent: boolean;
   isRemote: boolean;
+  /** 菜单项数量，用于预留高度，避免贴窗口底部被裁切。 */
+  items: number;
 }
 
 const defaultOpen = { head: true, local: true, remote: false, tags: false };
@@ -97,6 +104,10 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
   onUpdate,
   onPush,
   onRename,
+  onCreateTag,
+  onPushTag,
+  onDeleteTag,
+  onDeleteRemoteTag,
 }) => {
   const { t } = useI18n();
   const [query, setQuery] = useState('');
@@ -176,10 +187,12 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
   const openMenu = (event: React.MouseEvent, next: Omit<MenuState, 'x' | 'y'>) => {
     event.preventDefault();
     event.stopPropagation();
+    // 每项约 28px + 标题行；tag 菜单项变多后要跟着调，否则贴底部会被裁切。
+    const height = 44 + next.items * 28;
     setMenu({
       ...next,
       x: Math.min(event.clientX, window.innerWidth - 196),
-      y: Math.min(event.clientY, window.innerHeight - (next.kind === 'branch' && !next.isRemote ? 320 : 180)),
+      y: Math.min(event.clientY, Math.max(0, window.innerHeight - height)),
     });
   };
 
@@ -282,6 +295,7 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
                 checkoutName: branch.name,
                 isCurrent,
                 isRemote: false,
+                items: 8,
               })}
             />
           );
@@ -332,6 +346,7 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
                     checkoutName: item.fullName,
                     isCurrent: false,
                     isRemote: true,
+                    items: 5,
                   })}
                 />
               ))}
@@ -344,6 +359,7 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
           count={visibleTags.length}
           open={sectionOpen('tags', visibleTags.length > 0)}
           onToggle={() => toggleSection('tags')}
+          action={onCreateTag ? { title: t('logBranches.newTag'), onClick: () => onCreateTag(currentBranch || 'HEAD', currentBranch || 'HEAD') } : undefined}
         />
         {sectionOpen('tags', visibleTags.length > 0) && visibleTags.map(tag => (
           <TreeRow
@@ -360,6 +376,7 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
               checkoutName: tag.hash || tag.name,
               isCurrent: false,
               isRemote: false,
+              items: 8,
             })}
           />
         ))}
@@ -421,6 +438,31 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
               />
             </>
           )}
+          {menu.kind === 'tag' && (
+            <>
+              <div className="my-1 border-t border-jb-border/60" />
+              <MenuButton
+                label={t('logBranches.newTag')}
+                disabled={!onCreateTag}
+                onClick={() => { onCreateTag?.(menu.name, menu.name); setMenu(null); }}
+              />
+              <MenuButton
+                label={t('logBranches.pushTag')}
+                disabled={!onPushTag}
+                onClick={() => { onPushTag?.(menu.name); setMenu(null); }}
+              />
+              <MenuButton
+                label={t('logBranches.deleteTag')}
+                disabled={!onDeleteTag}
+                onClick={() => { onDeleteTag?.(menu.name); setMenu(null); }}
+              />
+              <MenuButton
+                label={t('logBranches.deleteRemoteTag')}
+                disabled={!onDeleteRemoteTag}
+                onClick={() => { onDeleteRemoteTag?.(menu.name); setMenu(null); }}
+              />
+            </>
+          )}
         </div>
       )}
     </div>
@@ -432,22 +474,32 @@ function SectionHeader({
   count,
   open,
   onToggle,
+  action,
 }: {
   label: string;
   count?: number;
   open: boolean;
   onToggle: () => void;
+  action?: { title: string; onClick: () => void };
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className="w-full h-[22px] px-1.5 flex items-center gap-1 text-[12px] text-[#BBBEC4] hover:bg-[#2B2D30]"
-    >
-      {open ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
-      <span className="truncate">{label}</span>
-      {count != null && <span className="ml-auto pr-1 text-[10px] text-[#6F737A] font-mono">{count}</span>}
-    </button>
+    <div className="w-full h-[22px] px-1.5 flex items-center gap-1 text-[12px] text-[#BBBEC4] hover:bg-[#2B2D30] group">
+      <button type="button" onClick={onToggle} className="flex items-center gap-1 flex-1 min-w-0 text-left">
+        {open ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
+        <span className="truncate">{label}</span>
+      </button>
+      {count != null && <span className="text-[10px] text-[#6F737A] font-mono">{count}</span>}
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          title={action.title}
+          className="p-0.5 rounded text-[#8C9099] opacity-0 group-hover:opacity-100 hover:text-[#DFE1E5] hover:bg-[#35373C] shrink-0"
+        >
+          <Plus className="w-3 h-3" />
+        </button>
+      )}
+    </div>
   );
 }
 

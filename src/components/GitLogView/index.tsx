@@ -7,6 +7,7 @@ import { CommitDetail } from './CommitDetail';
 import { BranchPanel } from './BranchPanel';
 import { SquashDialog } from './SquashDialog';
 import { isTauriEnvironment, loadCommitFiles, loadCommitLog } from '../../services/gitService';
+import { askInput } from '../common/askInput';
 import { useI18n } from '../../i18n/react';
 
 interface GitLogViewProps {
@@ -29,6 +30,10 @@ interface GitLogViewProps {
   onUpdateBranch?: (name: string) => void;
   onPushBranch?: (name: string) => void;
   onRenameBranch?: (oldName: string, newName: string) => Promise<boolean>;
+  onCreateTag?: (target: string, targetLabel: string) => void;
+  onPushTag?: (name: string) => void;
+  onDeleteTag?: (name: string) => void;
+  onDeleteRemoteTag?: (name: string) => void;
   branches?: GitBranch[];
   tags?: GitTag[];
   currentBranch?: string;
@@ -135,6 +140,10 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   onUpdateBranch,
   onPushBranch,
   onRenameBranch,
+  onCreateTag,
+  onPushTag,
+  onDeleteTag,
+  onDeleteRemoteTag,
   branches: branchList = [],
   tags = [],
   currentBranch = '',
@@ -481,12 +490,22 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
             onUpdate={onUpdateBranch}
             onPush={onPushBranch}
             onRename={onRenameBranch ? (name) => {
-              const next = prompt(t('toast.renamePrompt'), name);
-              if (!next || next === name) return;
-              void onRenameBranch(name, next).then(ok => {
-                if (ok) setSelectedBranch(prev => prev === name ? next : prev);
+              void askInput({
+                title: t('toast.renamePrompt'),
+                defaultValue: name,
+                confirmLabel: t('common.rename'),
+                tone: 'primary',
+              }).then(next => {
+                if (!next || next === name) return;
+                void onRenameBranch(name, next).then(ok => {
+                  if (ok) setSelectedBranch(prev => prev === name ? next : prev);
+                });
               });
             } : undefined}
+            onCreateTag={onCreateTag}
+            onPushTag={onPushTag}
+            onDeleteTag={onDeleteTag}
+            onDeleteRemoteTag={onDeleteRemoteTag}
           />
         }
         end={
@@ -529,6 +548,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         onRevert={onRevert}
         onReset={onReset}
         onCreateBranch={onCreateBranch}
+        onCreateTag={onCreateTag ? (hash) => onCreateTag(hash, hash.slice(0, 8)) : undefined}
         onCompareBranch={onCompareBranch}
         onSquash={onSquash ? (hashes) => setSquashHashes(hashes) : undefined}
         currentBranch={currentBranch}

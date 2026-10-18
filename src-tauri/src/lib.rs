@@ -214,6 +214,43 @@ fn rebase_onto(repo_path: String, name: String) -> Result<String, String> {
     git_ops::rebase_onto(&repo_path, &name)
 }
 
+#[tauri::command]
+fn repo_state(repo_path: String) -> Result<git_ops::RepoOperationState, String> {
+    git_ops::repo_state(&repo_path)
+}
+
+#[tauri::command]
+fn create_tag(repo_path: String, name: String, target: String, message: Option<String>) -> Result<String, String> {
+    git_ops::create_tag(&repo_path, &name, &target, message.as_deref().unwrap_or(""))
+}
+
+#[tauri::command]
+fn delete_tag(repo_path: String, name: String) -> Result<String, String> {
+    git_ops::delete_tag(&repo_path, &name)
+}
+
+#[tauri::command]
+fn push_tag(app: AppHandle, repo_path: String, name: String, remote: String) -> Result<String, String> {
+    let repo = repo_path.clone();
+    git_ops::push_tag(&repo_path, &name, &remote, &mut |line| emit_git_progress(&app, &repo, line))
+}
+
+#[tauri::command]
+fn delete_remote_tag(app: AppHandle, repo_path: String, name: String, remote: String) -> Result<String, String> {
+    let repo = repo_path.clone();
+    git_ops::delete_remote_tag(&repo_path, &name, &remote, &mut |line| emit_git_progress(&app, &repo, line))
+}
+
+#[tauri::command]
+fn continue_operation(repo_path: String) -> Result<git_ops::RepoOperationState, String> {
+    git_ops::continue_operation(&repo_path)
+}
+
+#[tauri::command]
+fn abort_operation(repo_path: String) -> Result<git_ops::RepoOperationState, String> {
+    git_ops::abort_operation(&repo_path)
+}
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GitProgressEvent {
@@ -272,6 +309,7 @@ fn push_to(
     branch: String,
     set_upstream: bool,
     source: Option<String>,
+    force: Option<bool>,
 ) -> Result<git_ops::SyncOutcome, String> {
     let repo = repo_path.clone();
     git_ops::push_to(
@@ -280,6 +318,7 @@ fn push_to(
         &branch,
         set_upstream,
         source.as_deref(),
+        force.unwrap_or(false),
         &mut |line| emit_git_progress(&app, &repo, line),
     )
 }
@@ -714,6 +753,13 @@ pub fn run() {
             create_branch,
             merge_branch,
             rebase_onto,
+            repo_state,
+            continue_operation,
+            abort_operation,
+            create_tag,
+            delete_tag,
+            push_tag,
+            delete_remote_tag,
             update_repo,
             push_repo,
             preview_push,

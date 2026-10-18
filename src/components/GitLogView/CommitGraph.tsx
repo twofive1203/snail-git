@@ -86,6 +86,7 @@ interface CommitGraphProps {
   onRevert?: (hash: string) => void;
   onReset?: (hash: string) => void;
   onCreateBranch?: (hash: string) => void;
+  onCreateTag?: (hash: string) => void;
   onCompareBranch?: (name: string) => void;
   onSquash?: (hashes: string[]) => void;
   currentBranch?: string;
@@ -259,6 +260,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   onRevert,
   onReset,
   onCreateBranch,
+  onCreateTag,
   onCompareBranch,
   onSquash,
   currentBranch = '',
@@ -675,6 +677,17 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
           >
             <PlusCircle className="w-3.5 h-3.5 text-purple-400" />
             <span>{t('graph.newBranch')}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              onCreateTag?.(contextMenu.commit!.hash);
+              setContextMenu(prev => ({ ...prev, visible: false }));
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-jb-selected hover:text-white flex items-center space-x-2"
+          >
+            <Tag className="w-3.5 h-3.5 text-amber-300" />
+            <span>{t('graph.newTag')}</span>
           </button>
 
           <div className="h-px bg-jb-border my-1" />

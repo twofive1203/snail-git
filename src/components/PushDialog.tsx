@@ -60,6 +60,7 @@ export const PushDialog: React.FC<PushDialogProps> = ({
   const [remote, setRemote] = useState('');
   const [branch, setBranch] = useState('');
   const [setUpstream, setSetUpstream] = useState(true);
+  const [force, setForce] = useState(false);
   const [preview, setPreview] = useState<PushPreview | null>(null);
   const [selected, setSelected] = useState('');
   const [fileMode, setFileMode] = useState<'selected' | 'all'>('selected');
@@ -112,6 +113,7 @@ export const PushDialog: React.FC<PushDialogProps> = ({
       setLoadError('');
       setSelected('');
       setFileMode('selected');
+      setForce(false);
       return;
     }
     remoteRef.current = '';
@@ -132,11 +134,21 @@ export const PushDialog: React.FC<PushDialogProps> = ({
     return () => window.clearTimeout(id);
   }, [open, busy]);
 
-  if (!open) return null;
-
   const branchName = branch.trim();
   const targetMatches = Boolean(preview && preview.remote === remote && preview.targetBranch === branchName);
+  // 只在「确实需要」时出现强制开关：两边分叉（预览判定）或已被非快进拒绝。
+  // behind 单独也算：本地跟踪过期时 lease 会拒，用户需要看到这个选项而不是只看到一句报错。
+  const needsForce = Boolean(targetMatches && (preview?.needsForce || (preview?.behind ?? 0) > 0));
+
+  // 换目标或不再需要强制时清掉勾选：用户当初是对旧目标做的危险决定。
+  useEffect(() => {
+    if (!needsForce) setForce(false);
+  }, [needsForce, remote, branchName]);
+
+  if (!open) return null;
+
   const nothingToPush = Boolean(targetMatches && preview?.targetExists && preview.ahead === 0);
+  const forceOffered = needsForce || force;
   const canPush = Boolean(remote && branchName && !loading && !busy && !loadError && !nothingToPush);
   const selectedCommit = preview?.commits.find(commit => commit.hash === selected) || preview?.commits[0];
   const files = fileMode === 'all'
@@ -252,6 +264,25 @@ export const PushDialog: React.FC<PushDialogProps> = ({
           <div className="px-3 py-1.5 bg-amber-500/10 text-amber-200 border-b border-amber-500/20 flex items-start gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>{t('push.behind', { count: preview.behind })}</span>
+          </div>
+        )}
+
+        {forceOffered && (
+          <div className="px-3 py-1.5 bg-rose-500/10 text-rose-200 border-b border-rose-500/25 flex items-start gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <label className="flex items-start gap-2 cursor-pointer min-w-0" title={t('push.forceHint')}>
+              <input
+                type="checkbox"
+                checked={force}
+                disabled={busy}
+                onChange={(event) => setForce(event.target.checked)}
+                className="mt-0.5 rounded border-rose-400/60 text-rose-500 focus:ring-0 cursor-pointer bg-jb-bg"
+              />
+              <span className="min-w-0">
+                <span className="font-medium">{t('push.force')}</span>
+                <span className="block text-rose-200/80 leading-relaxed">{t('push.forceHint')}</span>
+              </span>
+            </label>
           </div>
         )}
 
@@ -378,12 +409,22 @@ export const PushDialog: React.FC<PushDialogProps> = ({
           </button>
           <button
             ref={pushRef}
-            onClick={() => canPush && onPush({ remote, branch: branchName, setUpstream, source: sourceBranch || undefined })}
+            onClick={() => canPush && onPush({
+              remote,
+              branch: branchName,
+              setUpstream,
+              source: sourceBranch || undefined,
+              force: forceOffered ? force : false,
+            })}
             disabled={!canPush}
-            className="px-3 py-1.5 rounded bg-jb-blue hover:bg-jb-blueHover text-white font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            className={`px-3 py-1.5 rounded font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
+              force
+                ? 'bg-jb-red hover:bg-jb-red/85 text-white'
+                : 'bg-jb-blue hover:bg-jb-blueHover text-white'
+            }`}
           >
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowUp className="w-3.5 h-3.5" />}
-            <span>{t('push.action')}</span>
+            <span>{force ? t('push.actionForce') : t('push.action')}</span>
           </button>
         </div>
       </div>

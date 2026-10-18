@@ -15,6 +15,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { useI18n } from '../i18n/react';
+import { askInput } from './common/askInput';
 
 interface BranchesModalProps {
   isOpen: boolean;
@@ -104,8 +105,14 @@ export const BranchesModal: React.FC<BranchesModalProps> = ({
         <div className="px-3 py-2 border-b border-jb-border bg-jb-bg/40">
           <button 
             onClick={() => {
-              const name = prompt(t('branches.newPrompt'), 'feature/');
-              if (name) onCreateBranch?.(name);
+              void askInput({
+                title: t('branches.newPrompt'),
+                defaultValue: 'feature/',
+                confirmLabel: t('common.create'),
+                tone: 'primary',
+              }).then(name => {
+                if (name) onCreateBranch?.(name);
+              });
             }}
             className="w-full flex items-center justify-center space-x-1.5 py-1.5 rounded bg-jb-blue/15 hover:bg-jb-blue/25 text-jb-blue border border-jb-blue/30 font-medium transition-colors"
           >
