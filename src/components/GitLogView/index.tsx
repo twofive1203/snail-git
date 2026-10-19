@@ -38,6 +38,9 @@ interface GitLogViewProps {
   tags?: GitTag[];
   currentBranch?: string;
   currentUser?: string;
+  /** 重新加载仓库快照，用于对齐外部工具（IDEA 等）造成的改动。 */
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 interface HistoryQuery {
@@ -148,6 +151,8 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
   tags = [],
   currentBranch = '',
   currentUser = '',
+  onRefresh,
+  refreshing = false,
 }) => {
   const { t } = useI18n();
   const native = isTauriEnvironment();
@@ -179,6 +184,17 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
       /* 浏览器禁止本地存储时，收起状态只在当前会话有效 */
     }
   }, [branchesCollapsed]);
+
+  // 外部（IDEA、命令行）删掉分支后，选中项会留着不存在的 ref，查询历史时 git log 直接报错。
+  // 列表一更新就把失效项退回 All，避免用户必须重启。
+  useEffect(() => {
+    if (!native) return;
+    if (selectedBranch === 'All' || selectedBranch === 'Head') return;
+    if (branchList.length === 0) return;
+    if (branchList.some(branch => branch.name === selectedBranch)) return;
+    if (tags.some(tag => tag.name === selectedBranch)) return;
+    setSelectedBranch('All');
+  }, [branchList, tags, selectedBranch, native]);
 
   const [extraCommits, setExtraCommits] = useState<GitCommit[]>([]);
   const [browseHasMore, setBrowseHasMore] = useState(commitsHasMore);
@@ -483,6 +499,8 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
             currentBranch={currentBranch}
             selectedRef={selectedBranch}
             onSelectRef={setSelectedBranch}
+            onRefresh={onRefresh}
+            refreshing={refreshing}
             onCheckout={onCheckoutBranch ?? onCheckout}
             onCompare={onCompareBranch}
             onMerge={onMergeBranch}

@@ -371,6 +371,7 @@ export const zh = {
 
   'logBranches.title': '分支',
   'logBranches.collapse': '收起到左侧',
+  'logBranches.refresh': '刷新分支列表',
   'logBranches.expand': '展开分支面板',
   'logBranches.search': '搜索分支或标签',
   'logBranches.head': 'HEAD（当前分支）',
@@ -1036,6 +1037,7 @@ export const en: Record<MessageKey, string> = {
 
   'logBranches.title': 'Branches',
   'logBranches.collapse': 'Collapse to the left',
+  'logBranches.refresh': 'Refresh branches',
   'logBranches.expand': 'Expand branch panel',
   'logBranches.search': 'Search branches or tags',
   'logBranches.head': 'HEAD (current branch)',

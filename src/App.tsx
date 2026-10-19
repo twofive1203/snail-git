@@ -1118,6 +1118,8 @@ export function App() {
               currentUser={currentUser}
               branches={branches}
               tags={tags}
+              onRefresh={() => void refresh(activeRepo.path)}
+              refreshing={loading}
               onCheckoutBranch={(name) => void run(t('toast.checkedOut', { name }), () => checkoutBranch(activeRepo.path, name))}
               onMergeBranch={(name) => void run(t('toast.merged'), () => mergeBranch(activeRepo.path, name))}
               onRebaseBranch={(name) => void run(t('toast.rebased'), () => rebaseOnto(activeRepo.path, name))}

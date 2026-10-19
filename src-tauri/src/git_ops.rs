@@ -945,7 +945,33 @@ pub fn poll_signature(repo: &str) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    Some(format!("{}\n{}", read_head_hint(repo), lossy(&out.stdout)))
+    Some(format!(
+        "{}\n{}\n{}",
+        read_head_hint(repo),
+        lossy(&out.stdout),
+        refs_hint(repo)
+    ))
+}
+
+/// 外部工具（IDEA、命令行）建/删/切分支、动标签只改 refs，工作区和 HEAD 都不变，
+/// 只看 status + HEAD 的签名不会变，界面就会一直显示过期的分支列表。
+fn refs_hint(repo: &str) -> String {
+    run_git_global(
+        repo,
+        &["--no-optional-locks"],
+        &[
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+        ],
+        Duration::from_secs(8),
+    )
+    .ok()
+    .filter(|out| out.status.success())
+    .map(|out| lossy(&out.stdout))
+    .unwrap_or_default()
 }
 
 fn read_head_hint(repo: &str) -> String {
@@ -6008,6 +6034,39 @@ mod tests {
         assert_eq!((dirty, ahead, behind), (2, 2, 1));
         let (detached, _, _, _) = parse_branch_status("## HEAD (no branch)\n");
         assert_eq!(detached, "HEAD");
+    }
+
+    #[test]
+    fn signature_tracks_refs_changed_by_other_tools() {
+        let dir = std::env::temp_dir().join(format!("snail-git-signature-refs-{}", std::process::id()));
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        let init = run_git(&path, &["init", "-b", "main"], Duration::from_secs(10)).unwrap();
+        assert!(init.status.success(), "{}", lossy(&init.stderr));
+        let _ = run_git(&path, &["config", "user.email", "test@snailgit.local"], Duration::from_secs(5));
+        let _ = run_git(&path, &["config", "user.name", "SnailGit Test"], Duration::from_secs(5));
+        fs::write(dir.join("a.txt"), "hello\n").unwrap();
+        let _ = run_git(&path, &["add", "a.txt"], Duration::from_secs(8));
+        let committed = run_git(&path, &["commit", "-m", "init"], Duration::from_secs(10)).unwrap();
+        assert!(committed.status.success(), "{}", lossy(&committed.stderr));
+
+        // 外部工具（IDEA、命令行）删分支只改 refs，工作区和 HEAD 都不动，签名仍必须变化，
+        // 否则界面上会一直保留已被删掉的分支。
+        let before = signature(&path);
+        let created_ref = run_git(&path, &["branch", "feature-external"], Duration::from_secs(10)).unwrap();
+        assert!(created_ref.status.success(), "{}", lossy(&created_ref.stderr));
+        let created = signature(&path);
+        assert_ne!(created, before, "creating a branch must change the watch signature");
+        let removed = run_git(&path, &["branch", "-D", "feature-external"], Duration::from_secs(10)).unwrap();
+        assert!(removed.status.success(), "{}", lossy(&removed.stderr));
+        assert_ne!(
+            signature(&path),
+            created,
+            "deleting a branch must change the watch signature"
+        );
     }
 
     fn temp_repo() -> PathBuf {

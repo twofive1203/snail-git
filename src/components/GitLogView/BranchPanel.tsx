@@ -7,6 +7,7 @@ import {
   FolderGit2,
   GitBranch as BranchIcon,
   Plus,
+  RefreshCw,
   Search,
   Star,
   Tag,
@@ -23,6 +24,9 @@ interface BranchPanelProps {
   currentBranch: string;
   selectedRef: string;
   onSelectRef: (name: string) => void;
+  /** 手动重载仓库快照：外部工具改过分支后不必重启。 */
+  onRefresh?: () => void;
+  refreshing?: boolean;
   onCheckout?: (name: string) => void;
   onCompare?: (name: string) => void;
   onMerge?: (name: string) => void;
@@ -97,6 +101,8 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
   currentBranch,
   selectedRef,
   onSelectRef,
+  onRefresh,
+  refreshing = false,
   onCheckout,
   onCompare,
   onMerge,
@@ -216,14 +222,26 @@ export const BranchPanel: React.FC<BranchPanelProps> = ({
     <div className="h-full min-h-0 bg-[#1E1F22] flex flex-col text-xs select-none">
       <div className="h-7 px-2 flex items-center justify-between border-b border-[#303236] bg-[#2B2D30]/80 shrink-0">
         <span className="text-[11px] font-semibold text-[#DFE1E5]">{t('logBranches.title')}</span>
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          title={t('logBranches.collapse')}
-          className="p-0.5 rounded text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#35373C]"
-        >
-          <ChevronLeft className="w-3.5 h-3.5" />
-        </button>
+        <span className="flex items-center gap-0.5">
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={onRefresh}
+              title={t('logBranches.refresh')}
+              className="p-0.5 rounded text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#35373C]"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-[#3574F0]' : ''}`} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            title={t('logBranches.collapse')}
+            className="p-0.5 rounded text-[#8C9099] hover:text-[#DFE1E5] hover:bg-[#35373C]"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+        </span>
       </div>
 
       <div className="px-2 py-1.5 border-b border-[#303236] shrink-0">
