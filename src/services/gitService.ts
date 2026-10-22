@@ -323,6 +323,12 @@ export async function cherryPick(repoPath: string, hash: string): Promise<string
   return invokeTauri<string>('cherry_pick', { repoPath, hash });
 }
 
+/** 当前 HEAD 既没有、也没有等价补丁的提交。不在这份列表里的查看历史应标灰。 */
+export async function loadUnappliedCommits(repoPath: string, rev: string): Promise<string[]> {
+  if (!isTauriEnvironment()) return [];
+  return invokeTauri<string[]>('unapplied_commits', { repoPath, rev });
+}
+
 export async function revertCommit(repoPath: string, hash: string): Promise<string> {
   return invokeTauri<string>('revert_commit', { repoPath, hash });
 }

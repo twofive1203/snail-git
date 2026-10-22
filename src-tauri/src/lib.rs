@@ -363,6 +363,11 @@ fn cherry_pick(repo_path: String, hash: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn unapplied_commits(repo_path: String, rev: String) -> Result<Vec<String>, String> {
+    git_ops::unapplied_commits(&repo_path, &rev)
+}
+
+#[tauri::command]
 fn revert_commit(repo_path: String, hash: String) -> Result<String, String> {
     git_ops::revert_commit(&repo_path, &hash)
 }
@@ -770,6 +775,7 @@ pub fn run() {
             stash_apply,
             stash_drop,
             cherry_pick,
+            unapplied_commits,
             revert_commit,
             reset_to,
             preview_squash,

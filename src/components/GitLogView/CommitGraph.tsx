@@ -95,6 +95,8 @@ interface CommitGraphProps {
   listError?: string;
   hasMore?: boolean;
   onLoadMore?: () => void;
+  /** 当前分支还没有的提交。传入后，不在集合里的行标灰；null 表示不高亮。 */
+  unappliedHashes?: ReadonlySet<string> | null;
 }
 
 function compareTargets(commit: GitCommit, currentBranch: string): string[] {
@@ -269,6 +271,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   listError = '',
   hasMore = false,
   onLoadMore,
+  unappliedHashes = null,
 }) => {
   const { t } = useI18n();
   const [contextMenu, setContextMenu] = useState<{
@@ -466,6 +469,9 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
             const visibleSecondary = expanded ? secondary : secondary.slice(0, 2);
             const hiddenCount = secondary.length - visibleSecondary.length;
             const badges = [...primary, ...visibleSecondary];
+            const selected = selectedHashes.includes(commit.hash);
+            const applied = unappliedHashes !== null && !unappliedHashes.has(commit.hash);
+            const appliedHint = t('graph.alreadyApplied');
 
             return (
               <tr
@@ -476,17 +482,20 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                 }}
                 onClick={(event) => handleRowClick(event, commit)}
                 onContextMenu={(e) => handleContextMenu(e, commit)}
+                title={applied ? appliedHint : undefined}
                 className={`h-7 border-b border-jb-border/30 cursor-pointer transition-colors ${
-                  selectedHashes.includes(commit.hash)
+                  selected
                     ? 'bg-jb-selected text-jb-selectedText font-medium'
-                    : 'hover:bg-jb-hover/80 text-jb-text-primary'
+                    : applied
+                      ? 'bg-jb-active text-jb-text-secondary hover:bg-jb-borderHover'
+                      : 'hover:bg-jb-hover/80 text-jb-text-primary'
                 }`}
               >
                 <td className="p-0" style={{ width: graphWidth, minWidth: graphWidth }} />
 
                 <td className="py-1 px-2 overflow-hidden">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="truncate min-w-0" title={commit.subject}>{commit.subject}</span>
+                    <span className="truncate min-w-0" title={applied ? `${commit.subject} — ${appliedHint}` : commit.subject}>{commit.subject}</span>
                     {badges.length > 0 && (
                       <div className="ml-auto flex items-center gap-1 shrink-0 max-w-[58%] min-w-0">
                         <div className="flex items-center gap-1 min-w-0 overflow-hidden">

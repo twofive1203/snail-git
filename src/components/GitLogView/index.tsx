@@ -6,7 +6,7 @@ import { CommitGraph } from './CommitGraph';
 import { CommitDetail } from './CommitDetail';
 import { BranchPanel } from './BranchPanel';
 import { SquashDialog } from './SquashDialog';
-import { isTauriEnvironment, loadCommitFiles, loadCommitLog } from '../../services/gitService';
+import { isTauriEnvironment, loadCommitFiles, loadCommitLog, loadUnappliedCommits } from '../../services/gitService';
 import { askInput } from '../common/askInput';
 import { useI18n } from '../../i18n/react';
 
@@ -60,6 +60,16 @@ function appendCommits(current: GitCommit[], incoming: GitCommit[]): GitCommit[]
 
 function historyQueryKey(query: HistoryQuery): string {
   return JSON.stringify(query);
+}
+
+function readyHistoryBranch(key: string): string {
+  if (!key) return '';
+  try {
+    const parsed = JSON.parse(key) as Partial<HistoryQuery>;
+    return typeof parsed.branch === 'string' ? parsed.branch : '';
+  } catch {
+    return '';
+  }
 }
 
 function errorText(err: unknown, fallback: string): string {
@@ -176,6 +186,17 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
       return false;
     }
   });
+  const [highlightNotPicked, setHighlightNotPicked] = useState(() => {
+    try {
+      return localStorage.getItem('snailgit.log.highlightNotPicked') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [unappliedHashes, setUnappliedHashes] = useState<Set<string> | null>(null);
+  const [marksRev, setMarksRev] = useState('');
+  const [marksError, setMarksError] = useState('');
+  const markSeq = useRef(0);
 
   useEffect(() => {
     try {
@@ -184,6 +205,14 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
       /* 浏览器禁止本地存储时，收起状态只在当前会话有效 */
     }
   }, [branchesCollapsed]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('snailgit.log.highlightNotPicked', highlightNotPicked ? '1' : '0');
+    } catch {
+      /* 浏览器禁止本地存储时，高亮开关只在当前会话有效 */
+    }
+  }, [highlightNotPicked]);
 
   // 外部（IDEA、命令行）删掉分支后，选中项会留着不存在的 ref，查询历史时 git log 直接报错。
   // 列表一更新就把失效项退回 All，避免用户必须重启。
@@ -331,6 +360,58 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
     }
     return merged;
   }, [tags, browseCommits]);
+
+  // 看当前分支或全部历史时没有对照意义。远程同名分支仍要比较，它可能比本地多提交。
+  const compareRev = selectedBranch !== 'All'
+    && selectedBranch !== 'Head'
+    && selectedBranch !== currentBranch
+    ? selectedBranch
+    : '';
+  const comparedTip = useMemo(() => {
+    if (!compareRev) return '';
+    const branch = branchList.find(item => item.name === compareRev);
+    if (branch?.lastCommitHash) return branch.lastCommitHash;
+    return panelTags.find(item => item.name === compareRev)?.hash ?? '';
+  }, [compareRev, branchList, panelTags]);
+  const headStamp = commits[0]?.hash ?? '';
+
+  useEffect(() => {
+    if (!native || !repoPath || !highlightNotPicked || !compareRev) {
+      markSeq.current += 1;
+      setUnappliedHashes(null);
+      setMarksRev('');
+      setMarksError('');
+      return;
+    }
+    const seq = ++markSeq.current;
+    const pathAtStart = repoPath;
+    const revAtStart = compareRev;
+    setUnappliedHashes(null);
+    setMarksRev('');
+    setMarksError('');
+    loadUnappliedCommits(repoPath, compareRev)
+      .then(hashes => {
+        if (seq !== markSeq.current || repoRef.current !== pathAtStart) return;
+        setMarksRev(revAtStart);
+        setUnappliedHashes(new Set(hashes));
+      })
+      .catch(err => {
+        if (seq !== markSeq.current || repoRef.current !== pathAtStart) return;
+        setUnappliedHashes(null);
+        setMarksRev('');
+        setMarksError(errorText(err, t('log.notPickedFailed')));
+      });
+  }, [native, repoPath, highlightNotPicked, compareRev, comparedTip, headStamp, t]);
+
+  const notPickedTitle = !highlightNotPicked
+    ? t('filter.notPickedOff')
+    : marksError
+      ? marksError
+      : !compareRev
+        ? t('filter.notPickedNeedBranch')
+        : unappliedHashes
+          ? t('filter.notPickedOn')
+          : t('filter.notPickedLoading');
 
   // 浏览器预览没有 Git，只能在样本数据里过滤。桌面端有筛选时改走后端查询。
   const previewCommits = useMemo(() => {
@@ -542,6 +623,10 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         branches={branches}
         authors={authors}
         currentUser={currentUser}
+        showNotPicked={native}
+        notPicked={highlightNotPicked}
+        notPickedTitle={notPickedTitle}
+        onToggleNotPicked={() => setHighlightNotPicked(value => !value)}
       />
 
       <SplitPane
@@ -572,9 +657,14 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         currentBranch={currentBranch}
         listNote={listNote}
         listLoading={listLoading}
-        listError={queryError}
+        listError={queryError || (highlightNotPicked && compareRev ? marksError : '')}
         hasMore={canLoadMore}
         onLoadMore={loadMore}
+        unappliedHashes={
+          highlightNotPicked && compareRev && marksRev === compareRev && readyHistoryBranch(queryReadyKey) === compareRev
+            ? unappliedHashes
+            : null
+        }
       />
         }
         end={

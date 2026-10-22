@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, GitBranch, User, Calendar, FolderTree, RotateCcw, X, Star } from 'lucide-react';
+import { Search, GitBranch, User, Calendar, FolderTree, RotateCcw, X, Star, Scissors } from 'lucide-react';
 import { useI18n } from '../../i18n/react';
 
 interface FilterBarProps {
@@ -16,6 +16,10 @@ interface FilterBarProps {
   branches: string[];
   authors: string[];
   currentUser?: string;
+  showNotPicked?: boolean;
+  notPicked?: boolean;
+  notPickedTitle?: string;
+  onToggleNotPicked?: () => void;
 }
 
 export const FilterBar: React.FC<FilterBarProps> = ({
@@ -32,6 +36,10 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   branches,
   authors,
   currentUser = '',
+  showNotPicked = false,
+  notPicked = false,
+  notPickedTitle = '',
+  onToggleNotPicked,
 }) => {
   const { t } = useI18n();
   const meActive = Boolean(currentUser) && selectedAuthor === currentUser;
@@ -184,6 +192,23 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           </button>
         )}
       </div>
+
+      {showNotPicked && (
+        <button
+          type="button"
+          aria-pressed={notPicked}
+          onClick={onToggleNotPicked}
+          title={notPickedTitle}
+          className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[11px] shrink-0 whitespace-nowrap transition-colors ${
+            notPicked
+              ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+              : 'bg-[#2B2D30]/80 border-[#393B40] text-[#9DA0A8] hover:border-[#4E5157]'
+          }`}
+        >
+          <Scissors className="w-3 h-3 text-amber-400 shrink-0" />
+          <span>{t('filter.notPicked')}</span>
+        </button>
+      )}
 
       {/* 右侧关键词搜索框 */}
       <div className="relative w-64 min-w-[9rem] max-w-64 shrink">

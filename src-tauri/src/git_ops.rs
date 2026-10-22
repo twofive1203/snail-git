@@ -1120,6 +1120,51 @@ pub fn load_commit_files(repo: &str, hash: &str) -> Result<Vec<CommitFileDto>, S
     Ok(files)
 }
 
+/// 查看 `rev` 时，当前 HEAD 还没有的提交。
+/// 同一对象用 `rev-list <rev> --not HEAD` 判断；cherry-pick / rebase 会换哈希，
+/// 再用 `git cherry` 的 patch-id 去掉已经有等价补丁的提交。
+/// 返回值保持原样式，其余查看历史里的提交应标灰。合并提交没有单一补丁，不算已应用。
+pub fn unapplied_commits(repo: &str, rev: &str) -> Result<Vec<String>, String> {
+    let top = validate_repo(repo)?;
+    let rev = rev.trim();
+    validate_log_rev(rev)?;
+    let missing = run_git(
+        &top,
+        &["rev-list", rev, "--not", "HEAD"],
+        Duration::from_secs(30),
+    )?;
+    let missing_text = ensure_ok(&missing, "比较分支历史")?;
+    // patch-id 要扫两边的差异提交，比普通 log 慢，单独给更长的本地超时。
+    let cherry = run_git(&top, &["cherry", "HEAD", rev], Duration::from_secs(45))?;
+    let cherry_text = ensure_ok(&cherry, "比较等价补丁")?;
+    Ok(fresh_commits(&missing_text, &cherry_text))
+}
+
+fn fresh_commits(not_contained: &str, cherry: &str) -> Vec<String> {
+    let mut equivalent = std::collections::HashSet::new();
+    for line in cherry.lines() {
+        let mut parts = line.split_whitespace();
+        let mark = parts.next().unwrap_or("");
+        let hash = parts.next().unwrap_or("");
+        if mark == "-" && is_commit_hash(hash) {
+            equivalent.insert(hash.to_string());
+        }
+    }
+    let mut fresh = Vec::new();
+    for line in not_contained.lines() {
+        let hash = line.trim();
+        if hash.is_empty() || !is_commit_hash(hash) || equivalent.contains(hash) {
+            continue;
+        }
+        fresh.push(hash.to_string());
+    }
+    fresh
+}
+
+fn is_commit_hash(text: &str) -> bool {
+    (7..=40).contains(&text.len()) && text.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
 fn load_history_page(
     repo: &str,
     query: &CommitLogQuery,
@@ -7671,6 +7716,57 @@ mod tests {
         assert!(push_tag(&local_s, "v1.0.0", "elsewhere", &mut |_| {}).is_err());
         assert!(push_tag(&local_s, "nope", "origin", &mut |_| {}).is_err());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fresh_commits_drops_equivalent_patches_and_keeps_merges() {
+        let missing = "aaaaaaa\nbbbbbbb\nccccccc\n";
+        let cherry = "+ aaaaaaa\n- bbbbbbb already picked\n";
+        assert_eq!(
+            fresh_commits(missing, cherry),
+            vec!["aaaaaaa".to_string(), "ccccccc".to_string()]
+        );
+    }
+
+    #[test]
+    fn unapplied_commits_keeps_unique_and_drops_equivalent_patch() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let dir = std::env::temp_dir().join(format!("snail-git-cherry-mark-{stamp}"));
+        let _ = fs::remove_dir_all(&dir);
+        init_repo(&dir);
+        let path = dir.to_string_lossy().to_string();
+        git_ok(&path, &["config", "core.autocrlf", "false"]);
+        commit_file(&dir, &path, "root.txt", "root\n", "root");
+        commit_file(&dir, &path, "shared.txt", "shared\n", "shared");
+        let shared = head_hash(&path);
+        git_ok(&path, &["checkout", "-b", "feature"]);
+        commit_file(&dir, &path, "unique.txt", "only feature\n", "unique");
+        let unique = head_hash(&path);
+        commit_file(&dir, &path, "picked.txt", "pick me\n", "picked");
+        let picked = head_hash(&path);
+        git_ok(&path, &["checkout", "-b", "side"]);
+        commit_file(&dir, &path, "side.txt", "side\n", "side");
+        let side = head_hash(&path);
+        git_ok(&path, &["checkout", "feature"]);
+        git_ok(&path, &["merge", "-m", "merge side", "side"]);
+        let merge = head_hash(&path);
+        git_ok(&path, &["checkout", "main"]);
+        git_ok(&path, &["cherry-pick", &picked]);
+        let replayed = head_hash(&path);
+        assert_ne!(replayed, picked);
+
+        let fresh = unapplied_commits(&path, "feature").unwrap();
+        assert!(fresh.contains(&unique), "unique missing: {fresh:?}");
+        assert!(fresh.contains(&side), "side missing: {fresh:?}");
+        assert!(fresh.contains(&merge), "merge missing: {fresh:?}");
+        assert!(!fresh.contains(&picked), "equivalent patch should be greyed: {fresh:?}");
+        assert!(!fresh.contains(&shared), "ancestor should be greyed: {fresh:?}");
+        assert!(!fresh.contains(&replayed), "current HEAD commit is not on feature");
+        assert!(unapplied_commits(&path, "feature..main").is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 
