@@ -70,7 +70,11 @@ function remapAssignments(
   return next;
 }
 
-export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
+function isChecked(file: FileChange): boolean {
+  return file.included ?? file.isStaged;
+}
+
+const ChangelistTreeInner: React.FC<ChangelistTreeProps> = ({
   changes,
   selectedFileId,
   onSelectFile,
@@ -264,7 +268,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
       let stagedFiles: number;
       if (!node.isFolder) {
         totalFiles = 1;
-        stagedFiles = node.file?.isStaged ? 1 : 0;
+        stagedFiles = node.file && isChecked(node.file) ? 1 : 0;
       } else {
         totalFiles = rawChildren.reduce((acc, c) => acc + c.fileCount, 0);
         stagedFiles = rawChildren.reduce((acc, c) => acc + c.stagedCount, 0);
@@ -348,7 +352,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   // fileCount/stagedCount 在 buildTree 时就算好了，这里直接比对，不再对每个节点递归展开一遍文件。
   const getNodeCheckState = (node: TreeNode): 'checked' | 'unchecked' | 'indeterminate' => {
     if (!node.isFolder && node.file) {
-      return node.file.isStaged ? 'checked' : 'unchecked';
+      return isChecked(node.file) ? 'checked' : 'unchecked';
     }
     if (node.fileCount === 0) return 'unchecked';
     if (node.stagedCount >= node.fileCount) return 'checked';
@@ -365,7 +369,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
       onBatchToggleStage(files.map(f => f.id), targetState);
     } else {
       files.forEach(f => {
-        if (f.isStaged !== targetState) {
+        if (isChecked(f) !== targetState) {
           onToggleFileStage(f.id);
         }
       });
@@ -761,22 +765,22 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      const allStaged = untrackedFiles.every(f => f.isStaged);
+                      const allStaged = untrackedFiles.every(f => isChecked(f));
                       const targetState = !allStaged;
                       if (onBatchToggleStage) {
                         onBatchToggleStage(untrackedFiles.map(f => f.id), targetState);
                       } else {
                         untrackedFiles.forEach(f => {
-                          if (f.isStaged !== targetState) onToggleFileStage(f.id);
+                          if (isChecked(f) !== targetState) onToggleFileStage(f.id);
                         });
                       }
                     }}
                     className="w-3.5 h-3.5 mr-1.5 focus:outline-none flex items-center justify-center shrink-0"
-                    title={untrackedFiles.every(f => f.isStaged) ? t('changes.unstageUnversioned') : t('changes.stageUnversioned')}
+                    title={untrackedFiles.every(f => isChecked(f)) ? t('changes.unstageUnversioned') : t('changes.stageUnversioned')}
                   >
                     {renderCheckbox(
-                      untrackedFiles.every(f => f.isStaged) ? 'checked' :
-                      untrackedFiles.some(f => f.isStaged) ? 'indeterminate' : 'unchecked'
+                      untrackedFiles.every(f => isChecked(f)) ? 'checked' :
+                      untrackedFiles.some(f => isChecked(f)) ? 'indeterminate' : 'unchecked'
                     )}
                   </button>
 
@@ -825,7 +829,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
                       }}
                       className="w-3.5 h-3.5 mr-1.5 focus:outline-none flex items-center justify-center shrink-0"
                     >
-                      {renderCheckbox(file.isStaged ? 'checked' : 'unchecked')}
+                      {renderCheckbox(isChecked(file) ? 'checked' : 'unchecked')}
                     </button>
                     {renderFileIcon(file.filename)}
                     <FilePathDisplay path={file.path} className="flex-1 min-w-0" filenameClassName={fileStatusClass(file.status)} />
@@ -842,10 +846,10 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
         <div className="flex items-center min-w-0 space-x-1.5 font-sans overflow-hidden">
           <span className="text-[#DFE1E5] font-medium shrink-0 whitespace-nowrap">{t('changes.modified', { count: trackedFiles.length })}</span>
           <span className="text-[#6F737A] shrink-0">•</span>
-          <span className="text-[#3574F0] font-medium min-w-0 truncate">{t('changes.checked', { count: changes.filter(c => c.isStaged).length })}</span>
-          {untrackedFiles.some(c => c.isStaged) && (
+          <span className="text-[#3574F0] font-medium min-w-0 truncate">{t('changes.checked', { count: changes.filter(c => isChecked(c)).length })}</span>
+          {untrackedFiles.some(c => isChecked(c)) && (
             <span className="text-amber-400 font-mono text-[10px]">
-              {t('changes.includingUnversioned', { count: untrackedFiles.filter(c => c.isStaged).length })}
+              {t('changes.includingUnversioned', { count: untrackedFiles.filter(c => isChecked(c)).length })}
             </span>
           )}
         </div>
@@ -895,3 +899,5 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     </div>
   );
 };
+
+export const ChangelistTree = React.memo(ChangelistTreeInner);

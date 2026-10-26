@@ -60,6 +60,8 @@ export interface FileChange {
   additions: number;
   deletions: number;
   isStaged: boolean;
+  /** 本次提交是否纳入。缺省时跟随索引里的 isStaged。勾选本身不写 git。 */
+  included?: boolean;
   /** 后端给的内容指纹（mtime + 大小）；变化才需要重新拉 diff。 */
   stamp?: string;
   chunks: DiffChunk[];

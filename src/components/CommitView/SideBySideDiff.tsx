@@ -203,15 +203,29 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   // 回调包一层稳定的 ref 转发：父组件每次渲染传进来的都是新箭头函数，
   // 直接当 props 传下去会让 GutterLine 的 memo 完全失效。
   const chunksSource = file?.chunks;
-  const chunks = useMemo(() => (chunksSource ?? []).map(chunk => ({
-    ...chunk,
-    lines: ignoreWhitespace
-      ? chunk.lines.filter(line => {
-          const text = `${line.oldContent ?? ''}${line.newContent ?? ''}`;
-          return line.type === 'unchanged' || line.type === 'modified' || text.trim() !== '';
-        })
-      : chunk.lines,
-  })), [chunksSource, ignoreWhitespace]);
+  const chunks = useMemo(() => {
+    const source = chunksSource ?? [];
+    if (!ignoreWhitespace) return source;
+    // 显示层过滤，不再为了 -w 重跑 git。空白块藏起来，原始 patch 仍留在未过滤的数据上。
+    return source.flatMap(chunk => {
+      const lines = chunk.lines.flatMap(line => {
+        if (line.type === 'added' || line.type === 'deleted') {
+          const text = line.type === 'added' ? line.newContent : line.oldContent;
+          return (text ?? '').trim() === '' ? [] : [line];
+        }
+        if (line.type === 'modified') {
+          const oldNorm = (line.oldContent ?? '').replace(/\s+/g, '');
+          const newNorm = (line.newContent ?? '').replace(/\s+/g, '');
+          if (oldNorm === newNorm) {
+            return [{ ...line, type: 'unchanged' as const, wordDiff: undefined, oldWordDiff: undefined }];
+          }
+        }
+        return [line];
+      });
+      if (!lines.some(line => line.type !== 'unchanged')) return [];
+      return [{ ...chunk, lines }];
+    });
+  }, [chunksSource, ignoreWhitespace]);
   const rows = useMemo(() => {
     const next: DiffRow[] = [];
     chunks.forEach((chunk, chunkIndex) => {

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { FileChange } from '../../types/git';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { DiffChunk, FileChange } from '../../types/git';
 import { SplitPane } from '../common/SplitPane';
 import { useI18n } from '../../i18n/react';
 import { ChangelistTree } from './ChangelistTree';
@@ -20,7 +20,9 @@ interface CommitViewProps {
   onRevertChunk: (file: FileChange, chunkId: string) => void;
   onRollbackFile: (file: FileChange) => void;
   onRefresh: () => void;
-  onRequestDiff: (file: FileChange) => void;
+  onRequestDiff: (file: FileChange) => Promise<DiffChunk[] | null>;
+  /** 块操作或外部刷新作废了缓存时递增，让当前文件重新拉 diff。 */
+  diffGeneration?: number;
   onCreatePatch: () => void;
   repoKey?: string;
   ignoreWhitespace?: boolean;
@@ -44,6 +46,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
   onRollbackFile,
   onRefresh,
   onRequestDiff,
+  diffGeneration = 0,
   onCreatePatch,
   repoKey,
   ignoreWhitespace,
@@ -63,18 +66,61 @@ export const CommitView: React.FC<CommitViewProps> = ({
   }, [changes, selectedFileId]);
 
   const selectedFile = changes.find(c => c.id === selectedFileId) || null;
+  const [shownDiff, setShownDiff] = useState<{ id: string; chunks: DiffChunk[]; loading: boolean } | null>(null);
+  const requestRef = useRef(onRequestDiff);
+  requestRef.current = onRequestDiff;
 
   useEffect(() => {
     onSelectedFileChange?.(selectedFile);
   }, [selectedFile, onSelectedFileChange]);
 
   useEffect(() => {
-    if (selectedFile && !selectedFile.chunksLoaded) {
-      onRequestDiff(selectedFile);
+    if (!selectedFile) {
+      setShownDiff(null);
+      return;
     }
-  }, [selectedFile, onRequestDiff]);
+    const file = selectedFile;
+    let cancelled = false;
+    setShownDiff(prev => (
+      prev?.id === file.id && !prev.loading ? { ...prev, loading: true } : { id: file.id, chunks: prev?.id === file.id ? prev.chunks : [], loading: true }
+    ));
+    void requestRef.current(file).then(chunks => {
+      if (cancelled) return;
+      setShownDiff(prev => {
+        // 块操作会先把缓存标脏并返回 null，这时留着上一份，等刷新后再换。
+        if (chunks == null && prev?.id === file.id && prev.chunks.length > 0) {
+          return { ...prev, loading: false };
+        }
+        return { id: file.id, chunks: chunks ?? file.chunks, loading: false };
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile, diffGeneration]);
 
-  const stagedCount = changes.filter(c => c.isStaged).length;
+  const shownForFile = shownDiff?.id === selectedFile?.id ? shownDiff : null;
+  const diffReady = Boolean(shownForFile && !shownForFile.loading);
+  const fileForDiff = selectedFile ? {
+    ...selectedFile,
+    // 徽标表示“本次是否提交”，不是索引里是否已暂存。
+    isStaged: selectedFile.included ?? selectedFile.isStaged,
+    chunks: shownForFile ? shownForFile.chunks : selectedFile.chunks,
+    chunksLoaded: diffReady,
+  } : null;
+
+  const stagedCount = changes.filter(c => c.included ?? c.isStaged).length;
+  const selectFile = useCallback((file: FileChange) => setSelectedFileId(file.id), []);
+  const toggleFile = useCallback((fileId: string) => {
+    const file = changes.find(c => c.id === fileId);
+    if (file) onToggleFileStage(file, !(file.included ?? file.isStaged));
+  }, [changes, onToggleFileStage]);
+  const batchToggle = useCallback((fileIds: string[], targetStaged: boolean) => {
+    onBatchToggleStage(changes.filter(c => fileIds.includes(c.id)), targetStaged);
+  }, [changes, onBatchToggleStage]);
+  const rollbackSelected = useCallback(() => {
+    if (selectedFile) onRollbackFile(selectedFile);
+  }, [selectedFile, onRollbackFile]);
 
   return (
     <SplitPane
@@ -90,17 +136,10 @@ export const CommitView: React.FC<CommitViewProps> = ({
       <ChangelistTree
         changes={changes}
         selectedFileId={selectedFileId}
-        onSelectFile={(f) => setSelectedFileId(f.id)}
-        onToggleFileStage={(fileId) => {
-          const file = changes.find(c => c.id === fileId);
-          if (file) onToggleFileStage(file, !file.isStaged);
-        }}
-        onBatchToggleStage={(fileIds, targetStaged) => {
-          onBatchToggleStage(changes.filter(c => fileIds.includes(c.id)), targetStaged);
-        }}
-        onRollbackSelected={() => {
-          if (selectedFile) onRollbackFile(selectedFile);
-        }}
+        onSelectFile={selectFile}
+        onToggleFileStage={toggleFile}
+        onBatchToggleStage={batchToggle}
+        onRollbackSelected={rollbackSelected}
         onRefresh={onRefresh}
         onAddToGitignore={onAddToGitignore}
         onDeleteUnversioned={onDeleteUnversioned}
@@ -126,7 +165,7 @@ export const CommitView: React.FC<CommitViewProps> = ({
           </div>
         )}
         <SideBySideDiff
-          file={selectedFile}
+          file={fileForDiff}
           ignoreWhitespace={ignoreWhitespace}
           onIgnoreWhitespaceChange={onIgnoreWhitespaceChange}
           onToggleChunkStage={(chunkId) => {

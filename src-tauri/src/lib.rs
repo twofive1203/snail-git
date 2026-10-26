@@ -359,8 +359,8 @@ fn set_watch_paused(paused: bool) {
 }
 
 #[tauri::command(async)]
-fn stash_save(repo_path: String, message: String) -> Result<String, String> {
-    git_ops::stash_save(&repo_path, &message)
+fn stash_save(repo_path: String, message: String, paths: Option<Vec<String>>) -> Result<String, String> {
+    git_ops::stash_save(&repo_path, &message, paths.as_deref().unwrap_or(&[]))
 }
 
 #[tauri::command(async)]

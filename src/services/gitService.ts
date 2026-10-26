@@ -322,8 +322,8 @@ export async function updateLocalBranch(repoPath: string, name: string): Promise
   return invokeTauri<SyncOutcome>('update_local_branch', { repoPath, name });
 }
 
-export async function stashSave(repoPath: string, message: string): Promise<string> {
-  return invokeTauri<string>('stash_save', { repoPath, message });
+export async function stashSave(repoPath: string, message: string, paths: string[] = []): Promise<string> {
+  return invokeTauri<string>('stash_save', { repoPath, message, paths });
 }
 
 export async function stashApply(repoPath: string, index: number, pop: boolean): Promise<string> {

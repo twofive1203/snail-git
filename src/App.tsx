@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Header } from './components/Header';
 import { ActiveTab } from './components/TabBar';
 import { GitLogView } from './components/GitLogView';
@@ -126,41 +126,72 @@ const confirmActions = (
   ];
 };
 
-type DiffCacheEntry = { stamp: string; chunks: DiffChunk[]; additions: number; deletions: number };
+type DiffCacheEntry = {
+  stamp: string;
+  indexStaged: boolean;
+  chunks: DiffChunk[];
+  additions: number;
+  deletions: number;
+};
+
+/** 勾选覆盖。没有记录时跟随索引。冲突文件不能纳入本次提交。 */
+function includedOf(file: FileChange, inclusion: Record<string, boolean>): boolean {
+  if (file.status === 'conflict') return false;
+  return inclusion[file.id] ?? file.isStaged;
+}
+
+function withInclusion(files: FileChange[], inclusion: Record<string, boolean>): FileChange[] {
+  return files.map(file => {
+    const included = includedOf(file, inclusion);
+    if (file.included === included) return file;
+    return { ...file, included };
+  });
+}
+
+function pruneInclusion(inclusion: Record<string, boolean>, files: FileChange[]): Record<string, boolean> {
+  const byId = new Map(files.map(file => [file.id, file]));
+  let changed = false;
+  const next: Record<string, boolean> = {};
+  for (const [id, included] of Object.entries(inclusion)) {
+    const file = byId.get(id);
+    if (!file || file.status === 'conflict' || file.isStaged === included) {
+      changed = true;
+      continue;
+    }
+    next[id] = included;
+  }
+  return changed ? next : inclusion;
+}
 
 /**
- * 快照刷新会整块替换 changes，但 diff 是点开才拉的。
- * 内容指纹（stamp）和暂存状态都没变的文件直接复用上一份 diff，
- * 避免每次后台轮询 / 操作后 refresh 都让已加载的 diff 重新跑 git。
+ * diff 不写回 changes，避免点开文件就重建左侧树。
+ * 指纹或索引暂存状态变了才丢掉缓存；勾选本身不改索引，因此不失效。
  */
-function mergePreservedDiff(
+function pruneDiffCache(
   prev: FileChange[],
   next: FileChange[],
   cache: Map<string, DiffCacheEntry>,
+  dirty: Set<string>,
 ): FileChange[] {
   const prevById = new Map(prev.map(file => [file.id, file]));
-  const nextIds = new Set(next.map(file => file.id));
-  for (const id of cache.keys()) {
-    if (!nextIds.has(id)) cache.delete(id);
-  }
-  return next.map(file => {
-    const cached = cache.get(file.id);
-    const prevFile = prevById.get(file.id);
-    // 暂存状态一变，工作区/索引两侧的 diff 就重新分配了，旧缓存不能再用。
-    const reusable = cached
+  const nextById = new Map(next.map(file => [file.id, file]));
+  for (const id of [...cache.keys()]) {
+    const file = nextById.get(id);
+    const prevFile = prevById.get(id);
+    const cached = cache.get(id);
+    const reusable = Boolean(
+      file
+      && cached
       && prevFile
+      && !dirty.has(id)
       && file.stamp
       && cached.stamp === file.stamp
-      && prevFile.isStaged === file.isStaged;
-    if (!reusable) return file;
-    return {
-      ...file,
-      chunks: cached.chunks,
-      chunksLoaded: true,
-      additions: cached.additions,
-      deletions: cached.deletions,
-    };
-  });
+      && cached.indexStaged === file.isStaged
+      && prevFile.isStaged === file.isStaged,
+    );
+    if (!reusable) cache.delete(id);
+  }
+  return next;
 }
 
 export function App() {
@@ -185,6 +216,9 @@ export function App() {
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [commitsHasMore, setCommitsHasMore] = useState(false);
   const [changes, setChanges] = useState<FileChange[]>([]);
+  /** 相对索引的勾选覆盖。缺省跟随 isStaged，提交前不写 git。 */
+  const [inclusion, setInclusion] = useState<Record<string, boolean>>({});
+  const [diffGeneration, setDiffGeneration] = useState(0);
   const [shelves, setShelves] = useState<ShelfItem[]>([]);
   const [stashes, setStashes] = useState<StashItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -222,10 +256,15 @@ export function App() {
   const [opsLocked, setOpsLocked] = useState(false);
   const refreshLock = useRef(false);
   const refreshAgain = useRef(false);
-  const diffLock = useRef(new Set<string>());
-  // 已拉取过的 diff。快照刷新（守护线程轮询、操作后 refresh）会整块替换 changes，
-  // 不保留的话每次点回同一个文件都要重新跑 git diff。stamp 变了才失效。
+  const diffInflight = useRef(new Map<string, { stamp: string; indexStaged: boolean; task: Promise<DiffChunk[] | null> }>());
+  // 已拉取过的 diff。不挂在 changes 上，点开文件不会重建左侧树。
   const diffCache = useRef(new Map<string, DiffCacheEntry>());
+  /** 块操作改了索引但工作区指纹可能没变，刷新后必须丢掉这份 diff。 */
+  const dirtyDiffs = useRef(new Set<string>());
+  const changesRef = useRef(changes);
+  changesRef.current = changes;
+  const inclusionRef = useRef(inclusion);
+  inclusionRef.current = inclusion;
   /** 状态栏上次问过的文件，避免每次快照刷新都重算编码/行尾。 */
   const inspected = useRef<{ path: string; stamp: string }>({ path: '', stamp: '' });
   // 缓存作废代际：作废之前在飞的 load_file_diff 回来时已经不成立，不能再写回缓存。
@@ -233,7 +272,16 @@ export function App() {
   const invalidateDiffCache = useCallback(() => {
     diffGen.current += 1;
     diffCache.current.clear();
-    diffLock.current.clear();
+    diffInflight.current.clear();
+    dirtyDiffs.current.clear();
+    setDiffGeneration(diffGen.current);
+  }, []);
+  const markDiffDirty = useCallback((id: string) => {
+    dirtyDiffs.current.add(id);
+    diffCache.current.delete(id);
+    diffInflight.current.delete(id);
+    diffGen.current += 1;
+    setDiffGeneration(diffGen.current);
   }, []);
   const opLock = useRef(false);
   const acceptProgress = useRef(false);
@@ -276,7 +324,8 @@ export function App() {
     setBehindCount(snap.behindCount);
     setGitVersion(snap.gitVersion || 'Git');
     setCurrentUser(snap.userName || '');
-    setChanges(prev => mergePreservedDiff(prev, snap.changes, diffCache.current));
+    setChanges(prev => pruneDiffCache(prev, snap.changes, diffCache.current, dirtyDiffs.current));
+    setInclusion(prev => pruneInclusion(prev, snap.changes));
     setCommits(snap.commits);
     setCommitsHasMore(Boolean(snap.commitsHasMore));
     setBranches(snap.branches);
@@ -310,6 +359,12 @@ export function App() {
     } finally {
       refreshLock.current = false;
       setLoading(false);
+      if (dirtyDiffs.current.size > 0) {
+        for (const id of dirtyDiffs.current) diffCache.current.delete(id);
+        dirtyDiffs.current.clear();
+        diffGen.current += 1;
+        setDiffGeneration(diffGen.current);
+      }
       if (refreshAgain.current) {
         refreshAgain.current = false;
         void refresh(path);
@@ -344,8 +399,7 @@ export function App() {
     opLock.current = true;
     setOpsLocked(true);
     setBusyLabel(t('common.busy'));
-    // 写操作会改 index/工作区，缓存里的 diff 分侧可能已经不成立，统一作废。
-    invalidateDiffCache();
+    // 不再整表作废 diff。刷新时按指纹和索引状态丢掉真正过期的文件。
     try {
       const text = await action();
       showToast(text ? t('toast.withDetail', { label, detail: String(text).split('\n')[0] }) : label);
@@ -360,7 +414,7 @@ export function App() {
     } finally {
       releaseOp();
     }
-  }, [activeRepo, refresh, invalidateDiffCache]);
+  }, [activeRepo, refresh]);
 
   const guardNetwork = useCallback(async (kind: SyncAction, action: (repoPath: string) => Promise<void>) => {
     if (!isTauriEnvironment() || !activeRepo) {
@@ -701,6 +755,7 @@ export function App() {
     if (!isTauriEnvironment() || !activeRepo) return;
     // 换仓库时缓存全部作废：id 是仓库内相对路径，跨仓库会撞车。
     invalidateDiffCache();
+    setInclusion({});
     void setWatchPath(activeRepo.path);
     void refresh(activeRepo.path);
   }, [native, activeRepo?.id, invalidateDiffCache]);
@@ -794,25 +849,52 @@ export function App() {
     setRepositories(await toggleFavoriteRepo(repoId));
   };
 
+  const rememberInclusion = (file: FileChange, staged: boolean) => {
+    if (file.status === 'conflict') {
+      showToast(t('commit.conflict'), true);
+      return;
+    }
+    setInclusion(prev => {
+      const next = { ...prev };
+      if (staged === file.isStaged) delete next[file.id];
+      else next[file.id] = staged;
+      return next;
+    });
+  };
+
   const handleToggleFile = (file: FileChange, staged: boolean) => {
-    void run(staged ? t('toast.staged') : t('toast.unstaged'), () =>
-      staged ? stagePaths(activeRepo.path, [file.path]) : unstagePaths(activeRepo.path, [file.path])
-    );
+    rememberInclusion(file, staged);
   };
 
   const handleBatch = (files: FileChange[], staged: boolean) => {
-    const paths = files.map(f => f.path);
-    void run(staged ? t('toast.stagedSelected') : t('toast.unstagedSelected'), () =>
-      staged ? stagePaths(activeRepo.path, paths) : unstagePaths(activeRepo.path, paths)
-    );
+    const blocked = files.some(file => file.status === 'conflict');
+    if (blocked) showToast(t('commit.conflict'), true);
+    setInclusion(prev => {
+      const next = { ...prev };
+      for (const file of files) {
+        if (file.status === 'conflict') continue;
+        if (staged === file.isStaged) delete next[file.id];
+        else next[file.id] = staged;
+      }
+      return next;
+    });
   };
 
   const handleChunk = (file: FileChange, chunkId: string) => {
-    const chunk = file.chunks.find(c => c.id === chunkId);
+    const chunk = diffCache.current.get(file.id)?.chunks.find(c => c.id === chunkId)
+      ?? file.chunks.find(c => c.id === chunkId);
     if (!chunk?.rawPatch) {
       showToast(t('toast.chunkNoPatch'), true);
       return;
     }
+    // 块操作立刻写索引。清掉文件级覆盖，避免提交时把刚暂存的块又卸掉。
+    setInclusion(prev => {
+      if (!(file.id in prev)) return prev;
+      const next = { ...prev };
+      delete next[file.id];
+      return next;
+    });
+    markDiffDirty(file.id);
     void run(chunk.isStaged ? t('toast.chunkUnstaged') : t('toast.chunkStaged'), () =>
       applyChunk(activeRepo.path, chunk.rawPatch!, chunk.isStaged ? 'unstage' : 'stage')
     );
@@ -830,28 +912,45 @@ export function App() {
       tone: 'danger',
     }).then(ok => {
       if (!ok) return;
+      markDiffDirty(file.id);
       void run(t('toast.chunkRolledBack'), () => applyChunk(repoPath, patch, 'rollback'));
     });
   };
 
-  const requestDiff = useCallback((file: FileChange) => {
-    if (!isTauriEnvironment() || !activeRepo || diffLock.current.has(file.id)) return;
-    diffLock.current.add(file.id);
+  const requestDiff = useCallback((file: FileChange): Promise<DiffChunk[] | null> => {
+    const stamp = file.stamp ?? '';
+    const cached = diffCache.current.get(file.id);
+    if (
+      cached
+      && cached.stamp === stamp
+      && cached.indexStaged === file.isStaged
+      && !dirtyDiffs.current.has(file.id)
+    ) {
+      return Promise.resolve(cached.chunks);
+    }
+    if (!isTauriEnvironment() || !activeRepo) {
+      return Promise.resolve(file.chunks.length ? file.chunks : null);
+    }
+    // 块操作还没刷新完时不要先拉一份旧 diff，等刷新后的代际再读。
+    if (dirtyDiffs.current.has(file.id)) return Promise.resolve(null);
+    const pending = diffInflight.current.get(file.id);
+    if (pending && pending.stamp === stamp && pending.indexStaged === file.isStaged) return pending.task;
     const gen = diffGen.current;
-    void loadFileDiff(activeRepo.path, file.path, ignoreWhitespace, file.status === 'untracked').then(chunks => {
+    const task = loadFileDiff(activeRepo.path, file.path, false, file.status === 'untracked').then(chunks => {
+      if (gen !== diffGen.current || dirtyDiffs.current.has(file.id)) return null;
       const additions = chunks.reduce((n, c) => n + c.lines.filter(l => l.type === 'added').length, 0);
       const deletions = chunks.reduce((n, c) => n + c.lines.filter(l => l.type === 'deleted').length, 0);
-      if (gen !== diffGen.current) return;
-      diffCache.current.set(file.id, { stamp: file.stamp ?? '', chunks, additions, deletions });
-      setChanges(prev => prev.map(item => item.id === file.id
-        ? { ...item, chunks, chunksLoaded: true, additions, deletions }
-        : item));
+      diffCache.current.set(file.id, { stamp, indexStaged: file.isStaged, chunks, additions, deletions });
+      return chunks;
     }).catch(err => {
       showToast(String(err), true);
-      if (gen !== diffGen.current) return;
-      setChanges(prev => prev.map(item => item.id === file.id ? { ...item, chunksLoaded: true } : item));
-    }).finally(() => { if (gen === diffGen.current) diffLock.current.delete(file.id); });
-  }, [activeRepo, ignoreWhitespace]);
+      return null;
+    }).finally(() => {
+      if (diffInflight.current.get(file.id)?.task === task) diffInflight.current.delete(file.id);
+    });
+    diffInflight.current.set(file.id, { stamp, indexStaged: file.isStaged, task });
+    return task;
+  }, [activeRepo]);
 
   const openDiff = useCallback((title: string, files: RevisionFile[], loader: (path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>) => {
     diffLoader.current = loader;
@@ -1090,14 +1189,14 @@ export function App() {
   }, [activeTab]);
 
   const openShelve = useCallback(() => {
-    const staged = changes.filter(file => file.isStaged).map(file => file.path);
-    const count = staged.length || changes.length;
-    if (count === 0) {
+    const included = changes.filter(file => includedOf(file, inclusionRef.current));
+    const paths = included.length ? included.map(file => file.path) : changes.map(file => file.path);
+    if (paths.length === 0) {
       showToast(t('toast.nothingToShelve'), true);
       return;
     }
-    setShelveDraft({ paths: staged, count, includesUnstaged: staged.length === 0 });
-  }, [changes]);
+    setShelveDraft({ paths, count: paths.length, includesUnstaged: included.length === 0 });
+  }, [changes, t]);
 
   const confirmShelve = (name: string) => {
     const draft = shelveDraft;
@@ -1122,7 +1221,8 @@ export function App() {
     setStashDraft(null);
     if (!activeRepo) return;
     void run(t('toast.stashed'), async () => {
-      await stashSave(activeRepo.path, message);
+      const included = changesRef.current.filter(file => includedOf(file, inclusionRef.current));
+      await stashSave(activeRepo.path, message, included.length ? included.map(file => file.path) : []);
       setStashFocus(token => token + 1);
       setActiveTab('shelf');
       return t('toast.stashedDetail');
@@ -1176,6 +1276,8 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [handlePush, handleUpdate, focusList, shelveDraft, stashDraft, diffTitle, pushOpen, isAddRepoOpen, isBranchesOpen, isRemotesOpen, opsLocked, pendingConfirm]);
+
+  const commitFiles = useMemo(() => withInclusion(changes, inclusion), [changes, inclusion]);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-jb-bg text-jb-text-primary font-sans antialiased">
@@ -1327,7 +1429,7 @@ export function App() {
 
           {activeRepo && activeTab === 'commit' && (
             <CommitView
-              changes={changes}
+              changes={commitFiles}
               lastCommitMessage={(() => {
                 const head = commits.find(commit => commit.refs.some(ref => ref.includes('HEAD'))) ?? commits[0];
                 if (!head) return '';
@@ -1336,11 +1438,25 @@ export function App() {
               })()}
               onCommit={(msg, amend, andPush) => {
                 // IDEA 的提交并推送会先落本地提交，再打开推送预览，而不是直接推。
+                // 勾选只存在内存里，这里才把索引同步成勾选结果。
                 void (async () => {
+                  const repoPath = activeRepo.path;
                   const ok = await run(
                     andPush ? t('toast.committedThenPush') : t('toast.committed'),
-                    () => commitChanges(activeRepo.path, msg, amend, false),
+                    async () => {
+                      const current = changesRef.current;
+                      if (current.some(file => file.status === 'conflict')) {
+                        throw t('commit.resolveFirst');
+                      }
+                      const chosen = inclusionRef.current;
+                      const toStage = current.filter(file => includedOf(file, chosen) && !file.isStaged).map(file => file.path);
+                      const toUnstage = current.filter(file => !includedOf(file, chosen) && file.isStaged).map(file => file.path);
+                      if (toUnstage.length) await unstagePaths(repoPath, toUnstage);
+                      if (toStage.length) await stagePaths(repoPath, toStage);
+                      return commitChanges(repoPath, msg, amend, false);
+                    },
                   );
+                  if (ok) setInclusion({});
                   if (ok && andPush) {
                     setPushError('');
                     setPushRefreshKey(key => key + 1);
@@ -1372,16 +1488,14 @@ export function App() {
               onRequestDiff={requestDiff}
               onCreatePatch={() => {
                 if (!activeRepo) return;
-                const paths = changes.filter(file => file.isStaged).map(file => file.path);
-                void run(t('toast.patch'), () => createPatch(activeRepo.path, paths.length ? paths : changes.map(file => file.path)));
+                const included = changes.filter(file => includedOf(file, inclusionRef.current));
+                const paths = included.length ? included.map(file => file.path) : changes.map(file => file.path);
+                void run(t('toast.patch'), () => createPatch(activeRepo.path, paths));
               }}
               repoKey={activeRepo.id}
               ignoreWhitespace={ignoreWhitespace}
-              onIgnoreWhitespaceChange={(value) => {
-                setIgnoreWhitespace(value);
-                invalidateDiffCache();
-                setChanges(prev => prev.map(file => ({ ...file, chunks: [], chunksLoaded: false })));
-              }}
+              onIgnoreWhitespaceChange={setIgnoreWhitespace}
+              diffGeneration={diffGeneration}
               onResolveConflict={(file) => {
                 setActiveTab('merge');
                 void loadConflictFile(file.path);

@@ -488,12 +488,21 @@ fn run_git_global(
 
 fn output_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String> {
     let _slot = acquire_git_slot();
+    let mut child = spawn_piped(&mut cmd)?;
+    wait_child(&mut child, timeout)
+}
+
+struct GitChild {
+    child: Child,
+    out_handle: Option<std::thread::JoinHandle<Vec<u8>>>,
+    err_handle: Option<std::thread::JoinHandle<Vec<u8>>>,
+}
+
+fn spawn_piped(cmd: &mut Command) -> Result<GitChild, String> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("无法启动 git：{e}。请确认已安装 Git 并加入 PATH。"))?;
-
     let mut stdout_pipe = child.stdout.take().unwrap();
     let mut stderr_pipe = child.stderr.take().unwrap();
     let out_handle = std::thread::spawn(move || {
@@ -506,28 +515,118 @@ fn output_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String>
         let _ = stderr_pipe.read_to_end(&mut buf);
         buf
     });
+    Ok(GitChild {
+        child,
+        out_handle: Some(out_handle),
+        err_handle: Some(err_handle),
+    })
+}
 
+fn collect_child(running: &mut GitChild, status: std::process::ExitStatus) -> Output {
+    Output {
+        status,
+        stdout: running
+            .out_handle
+            .take()
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_default(),
+        stderr: running
+            .err_handle
+            .take()
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_default(),
+    }
+}
+
+fn wait_child(running: &mut GitChild, timeout: Duration) -> Result<Output, String> {
     let start = Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = out_handle.join().unwrap_or_default();
-                let stderr = err_handle.join().unwrap_or_default();
-                return Ok(Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
+        match running.child.try_wait() {
+            Ok(Some(status)) => return Ok(collect_child(running, status)),
             Ok(None) if start.elapsed() > timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = running.child.kill();
+                let _ = running.child.wait();
                 return Err("Git 命令超时。若是推送/拉取，请先在终端完成凭据登录后再试。".into());
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(40)),
             Err(e) => return Err(e.to_string()),
         }
     }
+}
+
+fn index_lock_busy(output: &Output) -> bool {
+    let err = String::from_utf8_lossy(&output.stderr);
+    err.contains("index.lock")
+}
+
+/// 同一次槽位里并行跑两条只读 git。`--no-optional-locks` 避免两边同时刷新 index。
+/// 仍撞上 index.lock 时退回串行，不把锁冲突当成差异为空。
+fn run_git_pair(
+    cwd: &str,
+    global: &[&str],
+    left: &[&str],
+    right: &[&str],
+    timeout: Duration,
+) -> Result<(Output, Output), String> {
+    let paired = {
+        let _slot = acquire_git_slot();
+        let mut left_cmd = git_base(cwd);
+        left_cmd.args(global).args(left);
+        let mut right_cmd = git_base(cwd);
+        right_cmd.args(global).args(right);
+        let mut left_child = spawn_piped(&mut left_cmd)?;
+        let mut right_child = match spawn_piped(&mut right_cmd) {
+            Ok(child) => child,
+            Err(err) => {
+                let _ = left_child.child.kill();
+                let _ = left_child.child.wait();
+                return Err(err);
+            }
+        };
+        let start = Instant::now();
+        let mut left_status = None;
+        let mut right_status = None;
+        loop {
+            if left_status.is_none() {
+                match left_child.child.try_wait() {
+                    Ok(status) => left_status = status,
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            if right_status.is_none() {
+                match right_child.child.try_wait() {
+                    Ok(status) => right_status = status,
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            if left_status.is_some() && right_status.is_some() {
+                let left_done = left_status.take().unwrap();
+                let right_done = right_status.take().unwrap();
+                break (
+                    collect_child(&mut left_child, left_done),
+                    collect_child(&mut right_child, right_done),
+                );
+            }
+            if start.elapsed() > timeout {
+                let _ = left_child.child.kill();
+                let _ = right_child.child.kill();
+                let _ = left_child.child.wait();
+                let _ = right_child.child.wait();
+                return Err("Git 命令超时。若是推送/拉取，请先在终端完成凭据登录后再试。".into());
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+    };
+    if index_lock_busy(&paired.0) || index_lock_busy(&paired.1) {
+        let mut left_args = global.to_vec();
+        left_args.extend(left);
+        let mut right_args = global.to_vec();
+        right_args.extend(right);
+        let left_out = run_git(cwd, &left_args, timeout)?;
+        let right_out = run_git(cwd, &right_args, timeout)?;
+        return Ok((left_out, right_out));
+    }
+    Ok(paired)
 }
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(90);
@@ -2302,11 +2401,17 @@ pub fn file_diff_hinted(
     let mut unstaged_args = vec!["diff", "-U3"];
     unstaged_args.extend(ws.iter().copied());
     unstaged_args.extend(["--", rel.as_str()]);
-    let unstaged = run_git(&top, &unstaged_args, Duration::from_secs(15))?;
     let mut staged_args = vec!["diff", "--cached", "-U3"];
     staged_args.extend(ws.iter().copied());
     staged_args.extend(["--", rel.as_str()]);
-    let staged = run_git(&top, &staged_args, Duration::from_secs(15))?;
+    // 两条只读 diff 并行。串行时选中一个文件要等两次进程启动。
+    let (unstaged, staged) = run_git_pair(
+        &top,
+        &["--no-optional-locks"],
+        &unstaged_args,
+        &staged_args,
+        Duration::from_secs(15),
+    )?;
     let mut chunks = split_hunks(&lossy(&unstaged.stdout), false, "u");
     chunks.extend(split_hunks(&lossy(&staged.stdout), true, "s"));
     if chunks.is_empty() {
@@ -4375,10 +4480,18 @@ pub fn update_local_branch(
     ))
 }
 
-pub fn stash_save(repo: &str, message: &str) -> Result<String, String> {
+pub fn stash_save(repo: &str, message: &str, paths: &[String]) -> Result<String, String> {
     let top = validate_repo(repo)?;
     let msg = if message.trim().is_empty() { "SnailGit stash" } else { message.trim() };
-    let output = run_git(&top, &["stash", "push", "-u", "-m", msg], Duration::from_secs(20))?;
+    if paths.is_empty() {
+        let output = run_git(&top, &["stash", "push", "-u", "-m", msg], Duration::from_secs(20))?;
+        return ensure_ok(&output, "贮藏");
+    }
+    let rels: Vec<String> = paths.iter().map(|path| safe_rel(path)).collect::<Result<_, _>>()?;
+    let mut args = vec!["stash".to_string(), "push".to_string(), "-u".to_string(), "-m".to_string(), msg.to_string(), "--".to_string()];
+    args.extend(rels);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = run_git(&top, &refs, Duration::from_secs(20))?;
     ensure_ok(&output, "贮藏")
 }
 
@@ -6377,7 +6490,7 @@ mod tests {
         let before = signature(&path);
         fs::write(dir.join("a.txt"), "stash me\n").unwrap();
         assert_ne!(signature(&path), before, "worktree change should change the watch signature");
-        stash_save(&path, "wip").unwrap();
+        stash_save(&path, "wip", &[]).unwrap();
         let stashes = list_stashes(&path).unwrap();
         assert_eq!(stashes.len(), 1);
         stash_apply(&path, stashes[0].index, true).unwrap();
