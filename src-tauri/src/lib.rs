@@ -269,18 +269,24 @@ fn emit_git_progress(app: &AppHandle, repo_path: &str, line: &str) {
 }
 
 /// `response`: probe=首次尝试，stash=贮藏本地改动后重试，continue=带着本地改动继续，abort=用户取消。
+/// `strategy`: merge / rebase 时覆盖 pull.rebase，只作用于这一次。空则仍读配置。
 #[tauri::command]
 fn update_repo(
     app: AppHandle,
     repo_path: String,
     response: Option<String>,
     confirm_risk: Option<bool>,
+    strategy: Option<String>,
 ) -> Result<git_ops::SyncOutcome, String> {
     let repo = repo_path.clone();
     let response = response.unwrap_or_else(|| if confirm_risk.unwrap_or(false) { "continue".into() } else { "probe".into() });
-    git_ops::update_repo(&repo_path, confirm_risk.unwrap_or(false), &response, &mut |line| {
-        emit_git_progress(&app, &repo, line)
-    })
+    git_ops::update_repo_strategy(
+        &repo_path,
+        confirm_risk.unwrap_or(false),
+        &response,
+        strategy.as_deref(),
+        &mut |line| emit_git_progress(&app, &repo, line),
+    )
 }
 
 #[tauri::command]

@@ -117,10 +117,11 @@ export interface GitProgress {
 
 export interface SyncOutcome {
   /**
-   * needs_force：推送被非快进拒绝，且可以用 --force-with-lease 重试。
-   * 不能当成失败吞掉——前端据此放出强制推送开关。
+   * needs_update：当前分支推到自己的上游被非快进拒绝。前端应询问合并或变基，成功后再推。
+   * needs_force：推送被非快进拒绝，且这次不能靠更新当前分支解决（或 lease 已过期）。
+   * 两者都不能当成失败吞掉。
    */
-  status: 'ok' | 'up_to_date' | 'needs_confirm' | 'needs_force' | 'cancelled' | 'blocked' | string;
+  status: 'ok' | 'up_to_date' | 'needs_confirm' | 'needs_update' | 'needs_force' | 'cancelled' | 'blocked' | string;
   message: string;
   ahead: number;
   behind: number;
@@ -238,8 +239,16 @@ export async function deleteRemoteTag(repoPath: string, name: string, remote: st
 /** response: probe=首次尝试，stash=贮藏本地改动后重试，continue=旧调用保留的硬更新，abort=取消。界面不再提供 continue。 */
 export type UpdateResponse = 'probe' | 'stash' | 'continue' | 'abort';
 
-export async function updateRepo(repoPath: string, response: UpdateResponse = 'probe'): Promise<SyncOutcome> {
-  return invokeTauri<SyncOutcome>('update_repo', { repoPath, response });
+export async function updateRepo(
+  repoPath: string,
+  response: UpdateResponse = 'probe',
+  strategy?: 'merge' | 'rebase',
+): Promise<SyncOutcome> {
+  return invokeTauri<SyncOutcome>('update_repo', {
+    repoPath,
+    response,
+    ...(strategy ? { strategy } : {}),
+  });
 }
 
 export async function pushRepo(repoPath: string, allowSetUpstream = false): Promise<SyncOutcome> {

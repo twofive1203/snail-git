@@ -19,7 +19,7 @@ import { OperationBar } from './components/OperationBar';
 import { TagDialog, type TagDraft } from './components/GitLogView/TagDialog';
 import { RemotePickerDialog } from './components/GitLogView/RemotePickerDialog';
 import { DiffChunk, FileChange, GitBranch, GitCommit, GitRepository, GitTag, RevisionFile, ShelfItem, StashItem } from './types/git';
-import { CheckCircle2, AlertCircle, AlertTriangle, GitMerge, FolderGit2, Archive } from 'lucide-react';
+import { CheckCircle2, AlertCircle, AlertTriangle, GitBranch as GitBranchIcon, GitMerge, FolderGit2, Archive } from 'lucide-react';
 import {
   addSavedRepo,
   abortOperation,
@@ -95,17 +95,32 @@ import { useI18n } from './i18n/react';
 
 /** 更新/推送被后端拦下时的确认框状态；等待用户选择期间操作锁已释放。 */
 interface PendingConfirm {
-  kind: 'update' | 'push';
+  kind: 'update' | 'push' | 'push-rejected';
   repoPath: string;
   outcome: SyncOutcome;
+  /** 合并或变基成功后要重试的推送。 */
+  retryPush?: PushTarget;
+  /** 推送被拒时用户选的方式。贮藏确认后必须沿用，不能退回 pull.rebase。 */
+  updateStrategy?: 'merge' | 'rebase';
 }
 
-/** 远程会覆盖未提交改动时只提供贮藏。不贮藏再试必然失败，变基也不再单独给“仍然变基”。 */
+/** 更新成功且没有留下冲突，才允许自动再推。有冲突时停住，和 IDEA 一样不继续推。 */
+function updateReadyToPush(outcome: SyncOutcome): boolean {
+  return (outcome.status === 'ok' || outcome.status === 'up_to_date') && outcome.conflictingPaths.length === 0;
+}
+
+/** 远程会覆盖未提交改动时只提供贮藏。推送被拒时提供合并 / 变基。 */
 const confirmActions = (
   pending: PendingConfirm | null,
   label: (key: MessageKey) => string,
 ): ConfirmAction[] => {
   if (!pending) return [];
+  if (pending.kind === 'push-rejected') {
+    return [
+      { value: 'merge', label: label('push.rejectedMerge'), tone: 'primary', icon: <GitMerge className="w-3.5 h-3.5" /> },
+      { value: 'rebase', label: label('push.rejectedRebase'), icon: <GitBranchIcon className="w-3.5 h-3.5" /> },
+    ];
+  }
   return [
     { value: 'stash', label: label('confirm.stashUpdate'), tone: 'primary', icon: <Archive className="w-3.5 h-3.5" /> },
   ];
@@ -371,6 +386,81 @@ export function App() {
     });
   }, [currentBranch, handleUpdate, guardNetwork, refresh]);
 
+  /** 按用户选的方式更新当前分支；没有冲突就重试原来的普通推送。 */
+  const continueRejectedPush = useCallback(async (
+    repoPath: string,
+    target: PushTarget,
+    strategy: 'merge' | 'rebase',
+    response: UpdateResponse,
+  ) => {
+    try {
+      const outcome = await updateRepo(repoPath, response, strategy);
+      if (outcome.status === 'needs_confirm') {
+        acceptProgress.current = false;
+        setBusyLabel(null);
+        setSyncAction(null);
+        setPendingConfirm({
+          kind: 'update',
+          repoPath,
+          outcome,
+          retryPush: { ...target, force: false },
+          updateStrategy: strategy,
+        });
+        return;
+      }
+      if (outcome.status === 'cancelled') {
+        showToast(t('toast.updateCancelled'));
+        await refresh(repoPath);
+        return;
+      }
+      if (!updateReadyToPush(outcome)) {
+        setPushOpen(false);
+        // 合并冲突时后端仍回 ok，这里改成失败提示，避免用户以为已经推上去了。
+        const shown = outcome.status === 'ok' ? { ...outcome, status: 'blocked' } : outcome;
+        await finishNetwork(repoPath, shown);
+        return;
+      }
+      const pushed = await pushTo(
+        repoPath,
+        target.remote,
+        target.branch,
+        target.setUpstream,
+        target.source,
+        false,
+      );
+      if (pushed.status === 'needs_update') {
+        acceptProgress.current = false;
+        setBusyLabel(null);
+        setSyncAction(null);
+        setPushError('');
+        setPendingConfirm({
+          kind: 'push-rejected',
+          repoPath,
+          outcome: pushed,
+          retryPush: { ...target, force: false },
+        });
+        await refresh(repoPath);
+        return;
+      }
+      if (pushed.status === 'ok' || pushed.status === 'up_to_date') {
+        setPushOpen(false);
+        await finishNetwork(repoPath, pushed);
+        return;
+      }
+      applySyncCounts(repoPath, pushed);
+      setPushError(pushed.message);
+      showToast(pushed.message || t('common.done'), pushed.status !== 'needs_force');
+      acceptProgress.current = false;
+      setBusyLabel(null);
+      await refresh(repoPath);
+    } catch (err) {
+      const message = String(err);
+      setPushError(message);
+      showToast(message, true);
+      await refresh(repoPath);
+    }
+  }, [refresh, t]);
+
   const confirmPush = useCallback((target: PushTarget) => {
     setPushError('');
     void guardNetwork('push', async (repoPath) => {
@@ -388,9 +478,23 @@ export function App() {
           await finishNetwork(repoPath, outcome);
           return;
         }
+        if (outcome.status === 'needs_update' && !target.force) {
+          acceptProgress.current = false;
+          setBusyLabel(null);
+          setSyncAction(null);
+          setPushError('');
+          setPendingConfirm({
+            kind: 'push-rejected',
+            repoPath,
+            outcome,
+            retryPush: { ...target, force: false },
+          });
+          await refresh(repoPath);
+          return;
+        }
         applySyncCounts(repoPath, outcome);
         setPushError(outcome.message);
-        // needs_force 不是失败：远程确实有本地没有的提交，对话框会据此放出强制推送开关。
+        // needs_force 不是失败：这次不能靠更新解决，对话框会据此放出强制推送开关。
         showToast(outcome.message || t('common.done'), outcome.status !== 'needs_force');
         acceptProgress.current = false;
         setBusyLabel(null);
@@ -449,6 +553,19 @@ export function App() {
     const pending = pendingConfirm;
     if (!pending) return;
     setPendingConfirm(null);
+    if (pending.kind === 'push-rejected' && pending.retryPush) {
+      const strategy = value === 'rebase' ? 'rebase' : 'merge';
+      void guardNetwork('update', async (repoPath) => {
+        await continueRejectedPush(repoPath, pending.retryPush!, strategy, 'probe');
+      });
+      return;
+    }
+    if (pending.retryPush && pending.updateStrategy) {
+      void guardNetwork('update', async (repoPath) => {
+        await continueRejectedPush(repoPath, pending.retryPush!, pending.updateStrategy!, value as UpdateResponse);
+      });
+      return;
+    }
     void guardNetwork('update', async (repoPath) => {
       const outcome = await updateRepo(repoPath, value as UpdateResponse);
       if (outcome.status === 'cancelled') {
@@ -467,7 +584,7 @@ export function App() {
       // blocked：这次更新没生效，finishNetwork 会按失败提示。
       await finishNetwork(repoPath, outcome);
     });
-  }, [pendingConfirm, guardNetwork, refresh]);
+  }, [pendingConfirm, guardNetwork, refresh, continueRejectedPush]);
 
   const handleFetch = useCallback(() => {
     void guardNetwork('fetch', async (repoPath) => {
@@ -1382,7 +1499,7 @@ export function App() {
         repoPath={activeRepo?.path || ''}
         refreshKey={pushRefreshKey}
         sourceBranch={pushSource}
-        busy={opsLocked && syncAction === 'push'}
+        busy={opsLocked && (syncAction === 'push' || syncAction === 'update')}
         error={pushError}
         onClose={() => {
           if (!opsLocked) setPushOpen(false);
@@ -1475,9 +1592,21 @@ export function App() {
 
       <ConfirmDialog
         open={Boolean(pendingConfirm)}
-        title={pendingConfirm?.kind === 'push' ? t('confirm.pushTitle') : t('confirm.updateTitle')}
-        message={pendingConfirm?.outcome.message || ''}
-        files={pendingConfirm?.outcome.conflictingPaths}
+        title={
+          pendingConfirm?.kind === 'push-rejected'
+            ? t('push.rejectedTitle')
+            : pendingConfirm?.kind === 'push'
+              ? t('confirm.pushTitle')
+              : t('confirm.updateTitle')
+        }
+        message={
+          pendingConfirm?.kind === 'push-rejected'
+            ? t('push.rejectedMessage', {
+              branch: pendingConfirm.retryPush?.branch || pendingConfirm.outcome.branch,
+            })
+            : (pendingConfirm?.outcome.message || '')
+        }
+        files={pendingConfirm?.kind === 'push-rejected' ? undefined : pendingConfirm?.outcome.conflictingPaths}
         actions={confirmActions(pendingConfirm, t)}
         onChoose={chooseConfirm}
         onCancel={cancelConfirm}

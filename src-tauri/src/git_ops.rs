@@ -2779,6 +2779,16 @@ fn integrate_strategy(value: Option<&str>) -> Result<&'static str, String> {
     }
 }
 
+/// 推送被拒后的对话框可以指定 merge / rebase，覆盖 pull.rebase。空则仍读配置。
+fn resolve_update_strategy(top: &str, requested: Option<&str>) -> Result<&'static str, String> {
+    match requested.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("merge") => Ok("merge"),
+        Some("rebase") => Ok("rebase"),
+        Some(other) => Err(format!("不支持的更新方式：{other}")),
+        None => integrate_strategy(config_get(top, "pull.rebase").as_deref()),
+    }
+}
+
 fn normalize_git_path(path: &str) -> String {
     path.replace('\\', "/")
 }
@@ -3269,6 +3279,17 @@ pub fn update_repo(
     response: &str,
     on_progress: &mut dyn FnMut(&str),
 ) -> Result<SyncOutcome, String> {
+    update_repo_strategy(repo, confirm_risk, response, None, on_progress)
+}
+
+/// `requested` 为 merge / rebase 时覆盖 pull.rebase，只作用于这一次更新。
+pub fn update_repo_strategy(
+    repo: &str,
+    confirm_risk: bool,
+    response: &str,
+    requested: Option<&str>,
+    on_progress: &mut dyn FnMut(&str),
+) -> Result<SyncOutcome, String> {
     let _pause = WatchPauseGuard::new();
     let action = update_response(if confirm_risk { "continue" } else { response })?;
     let top = validate_repo(repo)?;
@@ -3318,7 +3339,7 @@ pub fn update_repo(
         return Ok(sync_outcome("up_to_date", message, ahead, behind, &remote, &branch, Vec::new()));
     }
 
-    let strategy = integrate_strategy(config_get(&top, "pull.rebase").as_deref())?;
+    let strategy = resolve_update_strategy(&top, requested)?;
     let dirty = dirty_paths(&top)?;
     // 未跟踪文件只在和远程同名时才会挡住合并（git 不会覆盖未跟踪文件），此时也走贮藏/取消。
     let mut comparable = dirty.tracked.clone();
@@ -4021,14 +4042,30 @@ pub fn preview_push(
     })
 }
 
-/// 被远程拒绝时，判断是不是「需要强制推送」。不解析英文报错之外的语义：
-/// 只要命中非快进类拒绕，就交回一个可识别的状态而不是当普通失败吞掉。
+/// 被远程拒绝时，判断是不是非快进。不解析英文报错之外的语义：
+/// 只要命中这类拒绝，就交回一个可识别的状态而不是当普通失败吞掉。
 fn push_rejected_detail(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
     lower.contains("non-fast-forward")
         || lower.contains("[rejected]")
         || lower.contains("fetch first")
         || lower.contains("failed to push some refs")
+}
+
+/// 只有「当前分支推到自己的上游」才能安全地先合并/变基再推。
+/// 推其他分支、或推到不是上游的目标时，合并当前工作区并不能消掉这次拒绝。
+fn push_can_integrate(top: &str, source: &str, remote: &str, branch: &str) -> bool {
+    let Ok((current, _)) = current_branch(top) else {
+        return false;
+    };
+    if source != current {
+        return false;
+    }
+    let Some(upstream) = branch_upstream(top, &current) else {
+        return false;
+    };
+    let (up_remote, up_branch) = split_upstream(&upstream);
+    up_remote == remote && up_branch == branch
 }
 
 pub fn push_to(
@@ -4089,6 +4126,18 @@ pub fn push_to(
         }
         if !force && push_rejected_detail(&detail) {
             let (ahead, behind) = ahead_behind(&top);
+            // 当前分支推到上游：交给前端合并或变基后再推，不把强制推送当成默认出路。
+            if push_can_integrate(&top, &local, remote, branch) {
+                return Ok(sync_outcome(
+                    "needs_update",
+                    "远程有本地没有的提交，需要先合并或变基后再推送。",
+                    ahead,
+                    behind,
+                    remote,
+                    branch,
+                    Vec::new(),
+                ));
+            }
             return Ok(sync_outcome(
                 "needs_force",
                 format!("远程有本地没有的提交，普通推送被拒绝。确实要覆盖远程历史时请勾选强制推送。\n{detail}"),
@@ -7016,9 +7065,10 @@ mod tests {
         git_ok(&local_s, &["fetch", "origin"]);
         let before = run_git(&bare_s, &["rev-parse", "refs/heads/main"], Duration::from_secs(8)).unwrap();
 
-        // 不传 force：普通推送必须被拒，且返回可识别的 needs_force 而不是直接报错。
+        // 不传 force：当前分支推到自己的上游被拒，交给合并/变基，而不是强制推送。
         let refused = push_to(&local_s, "origin", "main", false, None, false, &mut |_| {}).unwrap();
-        assert_eq!(refused.status, "needs_force", "{}", refused.message);
+        assert_eq!(refused.status, "needs_update", "{}", refused.message);
+        assert!(!refused.message.contains("强制推送"), "{}", refused.message);
         let untouched = run_git(&bare_s, &["rev-parse", "refs/heads/main"], Duration::from_secs(8)).unwrap();
         assert_eq!(lossy(&before.stdout), lossy(&untouched.stdout), "被拒时远程不能变");
 
@@ -7029,6 +7079,70 @@ mod tests {
         assert_ne!(lossy(&before.stdout), lossy(&after.stdout), "强制推送应当改写远程历史");
         let local_head = run_git(&local_s, &["rev-parse", "HEAD"], Duration::from_secs(8)).unwrap();
         assert_eq!(lossy(&local_head.stdout), lossy(&after.stdout));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 推的不是当前分支时，合并工作区消不掉这次拒绝，仍只能强制推送。
+    #[test]
+    fn rejected_push_of_other_branch_still_needs_force() {
+        let (root, _bare, local_s, _other) = diverged_remote("snail-git-rejected-other");
+        git_ok(&local_s, &["branch", "side"]);
+        let refused = push_to(&local_s, "origin", "main", false, Some("side"), false, &mut |_| {}).unwrap();
+        assert_eq!(refused.status, "needs_force", "{}", refused.message);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 对话框选合并时必须覆盖 pull.rebase，成功后再普通推送。
+    /// 用共享祖先的普通分叉，不用 amend：改写根提交会被 Git 当成无关历史。
+    #[test]
+    fn rejected_current_branch_can_merge_then_push() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let root = std::env::temp_dir().join(format!("snail-git-rejected-merge-{stamp}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("local");
+        let other = root.join("other");
+        let bare_s = bare.to_string_lossy().to_string();
+        let local_s = local.to_string_lossy().to_string();
+        let other_s = other.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+        git_ok(&root_s, &["init", "--bare", "-b", "main", &bare_s]);
+        init_repo(&local);
+        fs::write(local.join("a.txt"), "v1\n").unwrap();
+        git_ok(&local_s, &["add", "a.txt"]);
+        git_ok(&local_s, &["commit", "-m", "init"]);
+        git_ok(&local_s, &["remote", "add", "origin", &bare_s]);
+        git_ok(&local_s, &["push", "-u", "origin", "main"]);
+
+        git_ok(&root_s, &["clone", &bare_s, &other_s]);
+        git_ok(&other_s, &["config", "user.email", "other@snailgit.local"]);
+        git_ok(&other_s, &["config", "user.name", "Other"]);
+        fs::write(other.join("b.txt"), "remote\n").unwrap();
+        git_ok(&other_s, &["add", "b.txt"]);
+        git_ok(&other_s, &["commit", "-m", "theirs"]);
+        git_ok(&other_s, &["push", "origin", "main"]);
+
+        fs::write(local.join("c.txt"), "ours\n").unwrap();
+        git_ok(&local_s, &["add", "c.txt"]);
+        git_ok(&local_s, &["commit", "-m", "ours"]);
+        git_ok(&local_s, &["config", "pull.rebase", "true"]);
+
+        let refused = push_to(&local_s, "origin", "main", false, None, false, &mut |_| {}).unwrap();
+        assert_eq!(refused.status, "needs_update", "{}", refused.message);
+
+        let updated = update_repo_strategy(&local_s, false, "probe", Some("merge"), &mut |_| {}).unwrap();
+        assert_eq!(updated.status, "ok", "{}", updated.message);
+        assert!(updated.conflicting_paths.is_empty(), "{:?}", updated.conflicting_paths);
+        let parents = run_git(&local_s, &["rev-list", "--parents", "-1", "HEAD"], Duration::from_secs(8)).unwrap();
+        let line = lossy(&parents.stdout);
+        assert!(line.split_whitespace().count() >= 3, "合并应产生两个父提交: {line}");
+
+        let pushed = push_to(&local_s, "origin", "main", false, None, false, &mut |_| {}).unwrap();
+        assert_eq!(pushed.status, "ok", "{}", pushed.message);
         let _ = fs::remove_dir_all(&root);
     }
 
