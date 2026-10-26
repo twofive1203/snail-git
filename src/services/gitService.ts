@@ -144,8 +144,14 @@ export async function setWatchPaused(paused: boolean): Promise<void> {
   await invokeTauri('set_watch_paused', { paused });
 }
 
-export async function loadFileDiff(repoPath: string, path: string, ignoreWhitespace = false): Promise<DiffChunk[]> {
-  return invokeTauri<DiffChunk[]>('load_file_diff', { repoPath, path, ignoreWs: ignoreWhitespace });
+export async function loadFileDiff(
+  repoPath: string,
+  path: string,
+  ignoreWhitespace = false,
+  untracked = false,
+): Promise<DiffChunk[]> {
+  // untracked 由调用方从快照里带下来，避免后端为判断单个文件再扫一遍整个工作区。
+  return invokeTauri<DiffChunk[]>('load_file_diff', { repoPath, path, ignoreWs: ignoreWhitespace, untracked });
 }
 
 export async function stagePaths(repoPath: string, paths: string[]): Promise<void> {

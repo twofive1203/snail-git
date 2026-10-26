@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FileChange, DiffLine } from '../../types/git';
 import { FilePathDisplay } from '../common/FilePathDisplay';
 import { 
@@ -79,7 +79,7 @@ function lineTone(line: DiffLine, pane: 'left' | 'right'): string {
   return '';
 }
 
-function PaneLine({
+function PaneLineInner({
   row,
   pane,
   active,
@@ -112,7 +112,7 @@ function PaneLine({
   );
 }
 
-function GutterLine({
+function GutterLineInner({
   row,
   active,
   showActions,
@@ -122,8 +122,8 @@ function GutterLine({
   row: DiffRow;
   active: boolean;
   showActions: boolean;
-  onStage: () => void;
-  onRevert: () => void;
+  onStage: (chunkId: string) => void;
+  onRevert: (chunkId: string) => void;
 }) {
   const { t } = useI18n();
   const isAdd = row.line.type === 'added';
@@ -141,7 +141,7 @@ function GutterLine({
       {showActions && (
         <div className="absolute left-1/2 top-0.5 z-20 -translate-x-1/2 flex flex-col gap-0.5">
           <button
-            onClick={onStage}
+            onClick={() => onStage(row.chunkId)}
             title={t(row.isStaged ? 'diff.unstageChunk' : 'diff.stageChunk', {
               oldStart: row.oldStart,
               oldLines: row.oldLines,
@@ -153,7 +153,7 @@ function GutterLine({
             <ChevronsRight className="w-3 h-3" />
           </button>
           <button
-            onClick={onRevert}
+            onClick={() => onRevert(row.chunkId)}
             title={t('diff.revertChunk')}
             className="w-5 h-5 rounded border border-rose-500/40 bg-jb-panel/95 text-rose-300 hover:bg-rose-500/20 flex items-center justify-center shadow-sm"
           >
@@ -172,6 +172,11 @@ function GutterLine({
     </div>
   );
 }
+
+// 行渲染占了 diff 面板的绝大部分开销：侧栏模式一次就有 rows×3 个节点，
+// hover 换块 / 切换当前差异都会让父组件重渲，包成 memo 后只有真正变了的行才重建。
+const PaneLine = React.memo(PaneLineInner);
+const GutterLine = React.memo(GutterLineInner);
 
 export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   file,
@@ -195,7 +200,10 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
   const gutterRef = useRef<HTMLDivElement>(null);
   const unifiedRef = useRef<HTMLDivElement>(null);
   const syncLock = useRef(false);
-  const chunks = (file?.chunks ?? []).map(chunk => ({
+  // 回调包一层稳定的 ref 转发：父组件每次渲染传进来的都是新箭头函数，
+  // 直接当 props 传下去会让 GutterLine 的 memo 完全失效。
+  const chunksSource = file?.chunks;
+  const chunks = useMemo(() => (chunksSource ?? []).map(chunk => ({
     ...chunk,
     lines: ignoreWhitespace
       ? chunk.lines.filter(line => {
@@ -203,25 +211,37 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
           return line.type === 'unchanged' || line.type === 'modified' || text.trim() !== '';
         })
       : chunk.lines,
-  }));
-  const rows: DiffRow[] = [];
-  chunks.forEach((chunk, chunkIndex) => {
-    chunk.lines.forEach((line, lineIndex) => {
-      rows.push({
-        key: `${chunk.id}-${lineIndex}`,
-        chunkIndex,
-        chunkId: chunk.id,
-        isStaged: chunk.isStaged,
-        isFirst: lineIndex === 0,
-        isLast: lineIndex === chunk.lines.length - 1,
-        oldStart: chunk.oldStart,
-        oldLines: chunk.oldLines,
-        newStart: chunk.newStart,
-        newLines: chunk.newLines,
-        line,
+  })), [chunksSource, ignoreWhitespace]);
+  const rows = useMemo(() => {
+    const next: DiffRow[] = [];
+    chunks.forEach((chunk, chunkIndex) => {
+      chunk.lines.forEach((line, lineIndex) => {
+        next.push({
+          key: `${chunk.id}-${lineIndex}`,
+          chunkIndex,
+          chunkId: chunk.id,
+          isStaged: chunk.isStaged,
+          isFirst: lineIndex === 0,
+          isLast: lineIndex === chunk.lines.length - 1,
+          oldStart: chunk.oldStart,
+          oldLines: chunk.oldLines,
+          newStart: chunk.newStart,
+          newLines: chunk.newLines,
+          line,
+        });
       });
     });
+    return next;
+  }, [chunks]);
+
+  const stageRef = useRef(onToggleChunkStage);
+  const revertRef = useRef(onRevertChunk);
+  useEffect(() => {
+    stageRef.current = onToggleChunkStage;
+    revertRef.current = onRevertChunk;
   });
+  const stageChunk = useCallback((chunkId: string) => stageRef.current(chunkId), []);
+  const revertChunk = useCallback((chunkId: string) => revertRef.current(chunkId), []);
 
   useEffect(() => {
     setCurrentChunkIndex(0);
@@ -495,8 +515,8 @@ export const SideBySideDiff: React.FC<SideBySideDiffProps> = ({
                   row={row}
                   active={row.chunkIndex === currentChunkIndex}
                   showActions={!readOnly && row.isFirst && hoveredChunk === row.chunkIndex}
-                  onStage={() => onToggleChunkStage(row.chunkId)}
-                  onRevert={() => onRevertChunk(row.chunkId)}
+                  onStage={stageChunk}
+                  onRevert={revertChunk}
                 />
               ))}
             </div>

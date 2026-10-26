@@ -126,6 +126,43 @@ const confirmActions = (
   ];
 };
 
+type DiffCacheEntry = { stamp: string; chunks: DiffChunk[]; additions: number; deletions: number };
+
+/**
+ * 快照刷新会整块替换 changes，但 diff 是点开才拉的。
+ * 内容指纹（stamp）和暂存状态都没变的文件直接复用上一份 diff，
+ * 避免每次后台轮询 / 操作后 refresh 都让已加载的 diff 重新跑 git。
+ */
+function mergePreservedDiff(
+  prev: FileChange[],
+  next: FileChange[],
+  cache: Map<string, DiffCacheEntry>,
+): FileChange[] {
+  const prevById = new Map(prev.map(file => [file.id, file]));
+  const nextIds = new Set(next.map(file => file.id));
+  for (const id of cache.keys()) {
+    if (!nextIds.has(id)) cache.delete(id);
+  }
+  return next.map(file => {
+    const cached = cache.get(file.id);
+    const prevFile = prevById.get(file.id);
+    // 暂存状态一变，工作区/索引两侧的 diff 就重新分配了，旧缓存不能再用。
+    const reusable = cached
+      && prevFile
+      && file.stamp
+      && cached.stamp === file.stamp
+      && prevFile.isStaged === file.isStaged;
+    if (!reusable) return file;
+    return {
+      ...file,
+      chunks: cached.chunks,
+      chunksLoaded: true,
+      additions: cached.additions,
+      deletions: cached.deletions,
+    };
+  });
+}
+
 export function App() {
   const { t } = useI18n();
   const [native, setNative] = useState(() => isTauriEnvironment());
@@ -186,6 +223,18 @@ export function App() {
   const refreshLock = useRef(false);
   const refreshAgain = useRef(false);
   const diffLock = useRef(new Set<string>());
+  // 已拉取过的 diff。快照刷新（守护线程轮询、操作后 refresh）会整块替换 changes，
+  // 不保留的话每次点回同一个文件都要重新跑 git diff。stamp 变了才失效。
+  const diffCache = useRef(new Map<string, DiffCacheEntry>());
+  /** 状态栏上次问过的文件，避免每次快照刷新都重算编码/行尾。 */
+  const inspected = useRef<{ path: string; stamp: string }>({ path: '', stamp: '' });
+  // 缓存作废代际：作废之前在飞的 load_file_diff 回来时已经不成立，不能再写回缓存。
+  const diffGen = useRef(0);
+  const invalidateDiffCache = useCallback(() => {
+    diffGen.current += 1;
+    diffCache.current.clear();
+    diffLock.current.clear();
+  }, []);
   const opLock = useRef(false);
   const acceptProgress = useRef(false);
 
@@ -227,7 +276,7 @@ export function App() {
     setBehindCount(snap.behindCount);
     setGitVersion(snap.gitVersion || 'Git');
     setCurrentUser(snap.userName || '');
-    setChanges(snap.changes);
+    setChanges(prev => mergePreservedDiff(prev, snap.changes, diffCache.current));
     setCommits(snap.commits);
     setCommitsHasMore(Boolean(snap.commitsHasMore));
     setBranches(snap.branches);
@@ -295,6 +344,8 @@ export function App() {
     opLock.current = true;
     setOpsLocked(true);
     setBusyLabel(t('common.busy'));
+    // 写操作会改 index/工作区，缓存里的 diff 分侧可能已经不成立，统一作废。
+    invalidateDiffCache();
     try {
       const text = await action();
       showToast(text ? t('toast.withDetail', { label, detail: String(text).split('\n')[0] }) : label);
@@ -309,7 +360,7 @@ export function App() {
     } finally {
       releaseOp();
     }
-  }, [activeRepo, refresh]);
+  }, [activeRepo, refresh, invalidateDiffCache]);
 
   const guardNetwork = useCallback(async (kind: SyncAction, action: (repoPath: string) => Promise<void>) => {
     if (!isTauriEnvironment() || !activeRepo) {
@@ -648,9 +699,11 @@ export function App() {
 
   useEffect(() => {
     if (!isTauriEnvironment() || !activeRepo) return;
+    // 换仓库时缓存全部作废：id 是仓库内相对路径，跨仓库会撞车。
+    invalidateDiffCache();
     void setWatchPath(activeRepo.path);
     void refresh(activeRepo.path);
-  }, [native, activeRepo?.id]);
+  }, [native, activeRepo?.id, invalidateDiffCache]);
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
@@ -784,16 +837,20 @@ export function App() {
   const requestDiff = useCallback((file: FileChange) => {
     if (!isTauriEnvironment() || !activeRepo || diffLock.current.has(file.id)) return;
     diffLock.current.add(file.id);
-    void loadFileDiff(activeRepo.path, file.path, ignoreWhitespace).then(chunks => {
+    const gen = diffGen.current;
+    void loadFileDiff(activeRepo.path, file.path, ignoreWhitespace, file.status === 'untracked').then(chunks => {
       const additions = chunks.reduce((n, c) => n + c.lines.filter(l => l.type === 'added').length, 0);
       const deletions = chunks.reduce((n, c) => n + c.lines.filter(l => l.type === 'deleted').length, 0);
+      if (gen !== diffGen.current) return;
+      diffCache.current.set(file.id, { stamp: file.stamp ?? '', chunks, additions, deletions });
       setChanges(prev => prev.map(item => item.id === file.id
         ? { ...item, chunks, chunksLoaded: true, additions, deletions }
         : item));
     }).catch(err => {
       showToast(String(err), true);
+      if (gen !== diffGen.current) return;
       setChanges(prev => prev.map(item => item.id === file.id ? { ...item, chunksLoaded: true } : item));
-    }).finally(() => diffLock.current.delete(file.id));
+    }).finally(() => { if (gen === diffGen.current) diffLock.current.delete(file.id); });
   }, [activeRepo, ignoreWhitespace]);
 
   const openDiff = useCallback((title: string, files: RevisionFile[], loader: (path: string, ignoreWhitespace: boolean) => Promise<DiffChunk[]>) => {
@@ -992,10 +1049,16 @@ export function App() {
 
   const handleSelectedFile = useCallback((file: FileChange | null) => {
     if (!isTauriEnvironment() || !activeRepo || !file) {
+      inspected.current = { path: '', stamp: '' };
       setFileEncoding('—');
       setLineEnding('—');
       return;
     }
+    // 快照刷新会重建 changes，即使还是同一个文件、内容也没变也会再次进来；
+    // 路径和内容指纹都没变就不必再问一次后端。
+    const stamp = file.stamp ?? '';
+    if (inspected.current.path === file.path && inspected.current.stamp === stamp) return;
+    inspected.current = { path: file.path, stamp };
     void inspectFile(activeRepo.path, file.path).then(meta => {
       setFileEncoding(meta.encoding);
       setLineEnding(meta.lineEnding);
@@ -1316,7 +1379,7 @@ export function App() {
               ignoreWhitespace={ignoreWhitespace}
               onIgnoreWhitespaceChange={(value) => {
                 setIgnoreWhitespace(value);
-                diffLock.current.clear();
+                invalidateDiffCache();
                 setChanges(prev => prev.map(file => ({ ...file, chunks: [], chunksLoaded: false })));
               }}
               onResolveConflict={(file) => {

@@ -40,6 +40,7 @@ interface TreeNode {
   file?: FileChange;
   children: TreeNode[];
   fileCount: number; // 包含的文件总数
+  stagedCount: number; // 其中已暂存的数量，用于直接算出勾选态
   submoduleTag?: string; // 如 eam-agent
 }
 
@@ -186,12 +187,20 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
     'eam-agent/src/main/java/com/uinnova/product/eam/agent'
   );
 
-  const visibleChanges = changes.filter(file => {
-    if (activeList === ALL_LISTS) return true;
-    return (assignments[file.path] || DEFAULT_LIST) === activeList;
-  });
-  const trackedFiles = visibleChanges.filter(c => c.status !== 'untracked');
-  const untrackedFiles = visibleChanges.filter(c => c.status === 'untracked');
+  // 这三个筛选结果必须 memo：否则每次渲染都是新数组，下面 buildTree 的 useMemo 永远失效，
+  // 选一个文件、拉一次 diff 都要重建整棵树。
+  const visibleChanges = useMemo(() => {
+    if (activeList === ALL_LISTS) return changes;
+    return changes.filter(file => (assignments[file.path] || DEFAULT_LIST) === activeList);
+  }, [changes, assignments, activeList]);
+  const trackedFiles = useMemo(
+    () => visibleChanges.filter(c => c.status !== 'untracked'),
+    [visibleChanges],
+  );
+  const untrackedFiles = useMemo(
+    () => visibleChanges.filter(c => c.status === 'untracked'),
+    [visibleChanges],
+  );
 
   // 构建树形结构并执行紧凑折叠算法
   const buildTree = (fileList: FileChange[]): TreeNode[] => {
@@ -252,10 +261,13 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
 
       // 递归计算文件总数
       let totalFiles: number;
+      let stagedFiles: number;
       if (!node.isFolder) {
         totalFiles = 1;
+        stagedFiles = node.file?.isStaged ? 1 : 0;
       } else {
         totalFiles = rawChildren.reduce((acc, c) => acc + c.fileCount, 0);
+        stagedFiles = rawChildren.reduce((acc, c) => acc + c.stagedCount, 0);
       }
 
       return {
@@ -266,6 +278,7 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
         file: node.file,
         children: rawChildren,
         fileCount: totalFiles,
+        stagedCount: stagedFiles,
         submoduleTag: currentTag,
       };
     };
@@ -332,15 +345,14 @@ export const ChangelistTree: React.FC<ChangelistTreeProps> = ({
   };
 
   // 计算节点的勾选状态 (checked, unchecked, indeterminate)
+  // fileCount/stagedCount 在 buildTree 时就算好了，这里直接比对，不再对每个节点递归展开一遍文件。
   const getNodeCheckState = (node: TreeNode): 'checked' | 'unchecked' | 'indeterminate' => {
     if (!node.isFolder && node.file) {
       return node.file.isStaged ? 'checked' : 'unchecked';
     }
-    const files = getAllFilesInNode(node);
-    if (files.length === 0) return 'unchecked';
-    const stagedCount = files.filter(f => f.isStaged).length;
-    if (stagedCount === files.length) return 'checked';
-    if (stagedCount === 0) return 'unchecked';
+    if (node.fileCount === 0) return 'unchecked';
+    if (node.stagedCount >= node.fileCount) return 'checked';
+    if (node.stagedCount === 0) return 'unchecked';
     return 'indeterminate';
   };
 

@@ -29,7 +29,7 @@ pub struct RepoBriefInfo {
     pub dirty_files_count: usize,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_system_git_version() -> Result<String, String> {
     let _slot = git_ops::acquire_git_slot();
     let output = git_ops::git_command()
@@ -43,7 +43,7 @@ fn get_system_git_version() -> Result<String, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn execute_git_command(args: Vec<String>, cwd: String) -> GitExecutionResult {
     let start = Instant::now();
     let _slot = git_ops::acquire_git_slot();
@@ -67,7 +67,7 @@ fn execute_git_command(args: Vec<String>, cwd: String) -> GitExecutionResult {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_repo_info(repo_path: String) -> Result<RepoBriefInfo, String> {
     match git_ops::validate_repo(&repo_path) {
         Ok(top) => {
@@ -88,32 +88,32 @@ fn get_repo_info(repo_path: String) -> Result<RepoBriefInfo, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_saved_repos() -> Vec<git_ops::SavedRepoDto> {
     git_ops::list_saved_repos()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn add_saved_repo(name: String, path: String) -> Result<git_ops::SavedRepoDto, String> {
     git_ops::add_saved_repo(&name, &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_saved_repo(id: String) -> Result<Vec<git_ops::SavedRepoDto>, String> {
     git_ops::remove_saved_repo(&id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn toggle_favorite_repo(id: String) -> Result<Vec<git_ops::SavedRepoDto>, String> {
     git_ops::toggle_favorite(&id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_repo_snapshot(repo_path: String) -> Result<RepoSnapshot, String> {
     git_ops::load_snapshot(&repo_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_commit_log(
     repo_path: String,
     branch: Option<String>,
@@ -137,12 +137,12 @@ fn load_commit_log(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_commit_files(repo_path: String, hash: String) -> Result<Vec<git_ops::CommitFileDto>, String> {
     git_ops::load_commit_files(&repo_path, &hash)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn repo_signature(repo_path: String) -> String {
     git_ops::signature(&repo_path)
 }
@@ -154,99 +154,109 @@ fn set_watch_path(repo_path: String) {
     }
 }
 
-#[tauri::command]
-fn load_file_diff(repo_path: String, path: String, ignore_ws: Option<bool>) -> Result<Vec<git_ops::DiffChunkDto>, String> {
-    git_ops::file_diff_opts(&repo_path, &path, ignore_ws.unwrap_or(false))
+#[tauri::command(async)]
+fn load_file_diff(
+    repo_path: String,
+    path: String,
+    ignore_ws: Option<bool>,
+    untracked: Option<bool>,
+) -> Result<Vec<git_ops::DiffChunkDto>, String> {
+    git_ops::file_diff_hinted(
+        &repo_path,
+        &path,
+        ignore_ws.unwrap_or(false),
+        untracked,
+    )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stage_paths(repo_path: String, paths: Vec<String>) -> Result<(), String> {
     git_ops::stage_paths(&repo_path, &paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn unstage_paths(repo_path: String, paths: Vec<String>) -> Result<(), String> {
     git_ops::unstage_paths(&repo_path, &paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn discard_paths(repo_path: String, paths: Vec<String>) -> Result<(), String> {
     git_ops::discard_paths(&repo_path, &paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn append_gitignore(repo_path: String, path: String) -> Result<String, String> {
     git_ops::append_gitignore(&repo_path, &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_unversioned(repo_path: String, path: String) -> Result<String, String> {
     git_ops::delete_unversioned(&repo_path, &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_chunk(repo_path: String, raw_patch: String, action: String) -> Result<(), String> {
     git_ops::apply_chunk(&repo_path, &raw_patch, &action)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn commit_changes(repo_path: String, message: String, amend: bool, and_push: bool) -> Result<String, String> {
     git_ops::commit(&repo_path, &message, amend, and_push)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn checkout_branch(repo_path: String, name: String) -> Result<String, String> {
     git_ops::checkout_branch(&repo_path, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_branch(repo_path: String, name: String, start_point: Option<String>) -> Result<String, String> {
     git_ops::create_branch(&repo_path, &name, start_point.as_deref())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn merge_branch(repo_path: String, name: String) -> Result<String, String> {
     git_ops::merge_branch(&repo_path, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rebase_onto(repo_path: String, name: String) -> Result<String, String> {
     git_ops::rebase_onto(&repo_path, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn repo_state(repo_path: String) -> Result<git_ops::RepoOperationState, String> {
     git_ops::repo_state(&repo_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_tag(repo_path: String, name: String, target: String, message: Option<String>) -> Result<String, String> {
     git_ops::create_tag(&repo_path, &name, &target, message.as_deref().unwrap_or(""))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_tag(repo_path: String, name: String) -> Result<String, String> {
     git_ops::delete_tag(&repo_path, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn push_tag(app: AppHandle, repo_path: String, name: String, remote: String) -> Result<String, String> {
     let repo = repo_path.clone();
     git_ops::push_tag(&repo_path, &name, &remote, &mut |line| emit_git_progress(&app, &repo, line))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_remote_tag(app: AppHandle, repo_path: String, name: String, remote: String) -> Result<String, String> {
     let repo = repo_path.clone();
     git_ops::delete_remote_tag(&repo_path, &name, &remote, &mut |line| emit_git_progress(&app, &repo, line))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn continue_operation(repo_path: String) -> Result<git_ops::RepoOperationState, String> {
     git_ops::continue_operation(&repo_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn abort_operation(repo_path: String) -> Result<git_ops::RepoOperationState, String> {
     git_ops::abort_operation(&repo_path)
 }
@@ -270,7 +280,7 @@ fn emit_git_progress(app: &AppHandle, repo_path: &str, line: &str) {
 
 /// `response`: probe=首次尝试，stash=贮藏本地改动后重试，continue=带着本地改动继续，abort=用户取消。
 /// `strategy`: merge / rebase 时覆盖 pull.rebase，只作用于这一次。空则仍读配置。
-#[tauri::command]
+#[tauri::command(async)]
 fn update_repo(
     app: AppHandle,
     repo_path: String,
@@ -289,7 +299,7 @@ fn update_repo(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn push_repo(app: AppHandle, repo_path: String, allow_set_upstream: bool) -> Result<git_ops::SyncOutcome, String> {
     let repo = repo_path.clone();
     git_ops::push_repo(&repo_path, allow_set_upstream, &mut |line| {
@@ -297,7 +307,7 @@ fn push_repo(app: AppHandle, repo_path: String, allow_set_upstream: bool) -> Res
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn preview_push(
     repo_path: String,
     remote: Option<String>,
@@ -307,7 +317,7 @@ fn preview_push(
     git_ops::preview_push(&repo_path, remote.as_deref(), branch.as_deref(), source.as_deref())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn push_to(
     app: AppHandle,
     repo_path: String,
@@ -329,7 +339,7 @@ fn push_to(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn update_local_branch(
     app: AppHandle,
     repo_path: String,
@@ -348,98 +358,98 @@ fn set_watch_paused(paused: bool) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stash_save(repo_path: String, message: String) -> Result<String, String> {
     git_ops::stash_save(&repo_path, &message)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stash_apply(repo_path: String, index: u32, pop: bool) -> Result<String, String> {
     git_ops::stash_apply(&repo_path, index, pop)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stash_drop(repo_path: String, index: u32) -> Result<String, String> {
     git_ops::stash_drop(&repo_path, index)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn cherry_pick(repo_path: String, hash: String) -> Result<String, String> {
     git_ops::cherry_pick(&repo_path, &hash)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn unapplied_commits(repo_path: String, rev: String) -> Result<Vec<String>, String> {
     git_ops::unapplied_commits(&repo_path, &rev)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn revert_commit(repo_path: String, hash: String) -> Result<String, String> {
     git_ops::revert_commit(&repo_path, &hash)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn reset_to(repo_path: String, hash: String) -> Result<String, String> {
     git_ops::reset_mixed(&repo_path, &hash)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn preview_squash(repo_path: String, hashes: Vec<String>) -> Result<git_ops::SquashPreview, String> {
     git_ops::preview_squash(&repo_path, &hashes)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn squash_commits(repo_path: String, hashes: Vec<String>, message: String) -> Result<String, String> {
     git_ops::squash_commits(&repo_path, &hashes, &message)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn compare_branches(repo_path: String, name: String) -> Result<String, String> {
     git_ops::compare_stat(&repo_path, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_shelf(repo_path: String, name: String, paths: Vec<String>) -> Result<git_ops::ShelfItemDto, String> {
     git_ops::create_shelf(&repo_path, &name, &paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn unshelve(repo_path: String, id: String) -> Result<String, String> {
     git_ops::unshelve(&repo_path, &id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_shelf(repo_path: String, id: String) -> Result<(), String> {
     git_ops::delete_shelf(&repo_path, &id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn pick_directory() -> Result<Option<String>, String> {
     git_ops::pick_directory()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn fetch_repo(app: AppHandle, repo_path: String) -> Result<String, String> {
     let repo = repo_path.clone();
     git_ops::fetch_repo(&repo_path, &mut |line| emit_git_progress(&app, &repo, line))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_remotes(repo_path: String) -> Result<git_ops::RemoteListDto, String> {
     git_ops::list_remotes(&repo_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn add_remote(repo_path: String, name: String, url: String) -> Result<git_ops::GitRemoteDto, String> {
     git_ops::add_remote(&repo_path, &name, &url)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rename_remote(repo_path: String, old_name: String, new_name: String) -> Result<(), String> {
     git_ops::rename_remote(&repo_path, &old_name, &new_name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_remote_url(
     repo_path: String,
     name: String,
@@ -449,79 +459,79 @@ fn set_remote_url(
     git_ops::set_remote_url(&repo_path, &name, &fetch_url, push_url.as_deref())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_remote(repo_path: String, name: String) -> Result<(), String> {
     git_ops::remove_remote(&repo_path, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn fetch_remote(app: AppHandle, repo_path: String, name: String) -> Result<String, String> {
     let repo = repo_path.clone();
     git_ops::fetch_remote(&repo_path, &name, &mut |line| emit_git_progress(&app, &repo, line))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn clone_repo(app: AppHandle, url: String, parent: String, directory: String) -> Result<String, String> {
     let parent_key = parent.clone();
     git_ops::clone_repo(&url, &parent, &directory, &mut |line| emit_git_progress(&app, &parent_key, line))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_patch(repo_path: String, paths: Vec<String>) -> Result<String, String> {
     git_ops::create_patch(&repo_path, &paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_revision_files(repo_path: String, spec: String, mode: String) -> Result<Vec<git_ops::RevisionFileDto>, String> {
     git_ops::list_revision_files(&repo_path, &spec, &mode)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_revision_diff(repo_path: String, spec: String, path: String, mode: String, ignore_ws: bool) -> Result<Vec<git_ops::DiffChunkDto>, String> {
     git_ops::load_revision_diff(&repo_path, &spec, &path, &mode, ignore_ws)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn shelf_patch_files(repo_path: String, id: String) -> Result<Vec<git_ops::PatchFileDto>, String> {
     git_ops::shelf_patch_files(&repo_path, &id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stash_patch_files(repo_path: String, index: u32) -> Result<Vec<git_ops::PatchFileDto>, String> {
     git_ops::stash_patch_files(&repo_path, index)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_branch(repo_path: String, name: String, remote: bool, force: bool) -> Result<String, String> {
     git_ops::delete_branch(&repo_path, &name, remote, force)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rename_branch(repo_path: String, old_name: String, new_name: String) -> Result<String, String> {
     git_ops::rename_branch(&repo_path, &old_name, &new_name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn toggle_favorite_branch(repo_path: String, name: String) -> Result<(), String> {
     git_ops::toggle_favorite_branch(&repo_path, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_conflict(repo_path: String, path: String) -> Result<git_ops::ConflictViewDto, String> {
     git_ops::load_conflict(&repo_path, &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn resolve_conflict(repo_path: String, path: String, content: String) -> Result<String, String> {
     git_ops::resolve_conflict(&repo_path, &path, &content)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn smart_merge_conflict(repo_path: String, path: String) -> Result<String, String> {
     git_ops::smart_merge_conflict(&repo_path, &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn inspect_file(repo_path: String, path: String) -> Result<git_ops::FileMetaDto, String> {
     git_ops::inspect_file(&repo_path, &path)
 }

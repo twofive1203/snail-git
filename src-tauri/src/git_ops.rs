@@ -162,6 +162,8 @@ pub struct FileChangeDto {
     pub additions: i32,
     pub deletions: i32,
     pub is_staged: bool,
+    /// 内容指纹（mtime + 大小）。前端用它决定上一次加载的 diff 还能不能复用。
+    pub stamp: String,
     pub chunks: Vec<DiffChunkDto>,
     pub chunks_loaded: bool,
 }
@@ -786,17 +788,59 @@ fn ensure_ok(output: &Output, action: &str) -> Result<String, String> {
     }
 }
 
+/// 仓库根目录缓存。`git rev-parse` 在 Windows 上一次就是几十毫秒，而打开一个文件、暂存一个文件
+/// 都要先定位仓库根；目录不变时根也不会变，缓存能直接省掉这条子进程。
+/// 只缓存命中后仍存在的目录，仓库被删/移动会自然回落到重新识别。
+static REPO_TOP_CACHE: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+const REPO_TOP_CACHE_LIMIT: usize = 16;
+
+fn repo_top_key(path: &str) -> String {
+    path.replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
+fn cached_toplevel(path: &str) -> Option<String> {
+    let key = repo_top_key(path);
+    let guard = REPO_TOP_CACHE.lock().ok()?;
+    guard
+        .iter()
+        .find(|(cached_key, _)| *cached_key == key)
+        .map(|(_, top)| top.clone())
+        .filter(|top| Path::new(top).is_dir())
+}
+
+fn remember_toplevel(path: &str, top: &str) {
+    let Ok(mut guard) = REPO_TOP_CACHE.lock() else {
+        return;
+    };
+    let key = repo_top_key(path);
+    if let Some(slot) = guard.iter_mut().find(|(cached_key, _)| *cached_key == key) {
+        slot.1 = top.to_string();
+        return;
+    }
+    if guard.len() >= REPO_TOP_CACHE_LIMIT {
+        guard.remove(0);
+    }
+    guard.push((key, top.to_string()));
+}
+
 pub fn validate_repo(path: &str) -> Result<String, String> {
     let p = Path::new(path);
     if !p.is_dir() {
         return Err("目录不存在".into());
+    }
+    if let Some(top) = cached_toplevel(path) {
+        return Ok(top);
     }
     let output = run_git(path, &["rev-parse", "--show-toplevel"], Duration::from_secs(8))?;
     let top = ensure_ok(&output, "识别仓库")?;
     if top.is_empty() {
         return Err("不是 Git 仓库".into());
     }
-    Ok(top.replace('/', "\\"))
+    let top = top.replace('/', "\\");
+    remember_toplevel(path, &top);
+    Ok(top)
 }
 
 fn recycle_inside_repo(repo: &str, full: &Path) -> Result<(), String> {
@@ -833,6 +877,22 @@ fn safe_rel(path: &str) -> Result<String, String> {
         return Err(format!("拒绝不安全路径：{path}"));
     }
     Ok(p)
+}
+
+/// 内容指纹：mtime + 大小。前端拿它判断“上次缓存的 diff 是否还能复用”，
+/// 快照刷新时就不用把已加载的 diff 全丢掉重新跑 git。取不到（已删除/被占用）时返回空串，
+/// 前端当成“不可复用”处理。
+fn file_stamp(repo: &str, path: &str) -> String {
+    let Ok(meta) = fs::metadata(Path::new(repo).join(path)) else {
+        return String::new();
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|delta| delta.as_millis())
+        .unwrap_or(0);
+    format!("{}-{}", mtime, meta.len())
 }
 
 fn filename_of(path: &str) -> String {
@@ -910,12 +970,13 @@ pub fn status_files(repo: &str) -> Result<Vec<FileChangeDto>, String> {
         files.push(FileChangeDto {
             id: display.replace('\\', "/"),
             filename: filename_of(&display),
-            path: display,
+            path: display.clone(),
             old_path,
             status,
             additions: 0,
             deletions: 0,
             is_staged,
+            stamp: file_stamp(repo, &display),
             chunks: Vec::new(),
             chunks_loaded: false,
         });
@@ -2219,12 +2280,21 @@ pub fn word_spans(old: &str, new: &str) -> (Vec<WordSpanDto>, Vec<WordSpanDto>) 
     (coalesce_spans(old_spans), coalesce_spans(new_spans))
 }
 
-pub fn file_diff_opts(repo: &str, path: &str, ignore_ws: bool) -> Result<Vec<DiffChunkDto>, String> {
+/// `untracked_hint` 由前端从快照里的 status 直接传下来。以前这里为了判断单个文件是否未跟踪
+/// 跑了一次整仓 `git status`，选中文件就多一次 40ms 起的子进程；现在只有拿不到提示时才退化成
+/// 单文件探测。
+pub fn file_diff_hinted(
+    repo: &str,
+    path: &str,
+    ignore_ws: bool,
+    untracked_hint: Option<bool>,
+) -> Result<Vec<DiffChunkDto>, String> {
     let top = validate_repo(repo)?;
     let rel = safe_rel(path)?;
-    let status = status_files(&top)?;
-    let file = status.iter().find(|f| f.path.replace('\\', "/") == rel.replace('\\', "/"));
-    let is_untracked = file.map(|f| f.status == "untracked").unwrap_or(false);
+    let is_untracked = match untracked_hint {
+        Some(value) => value,
+        None => single_file_untracked(&top, &rel)?,
+    };
     if is_untracked {
         return Ok(untracked_chunks(&top, &rel));
     }
@@ -2252,6 +2322,28 @@ pub fn file_diff_opts(repo: &str, path: &str, ignore_ws: bool) -> Result<Vec<Dif
         }
     }
     Ok(chunks)
+}
+
+/// 兜底探测只问这一个路径，不扫整个工作区。
+fn single_file_untracked(top: &str, rel: &str) -> Result<bool, String> {
+    let output = run_git(
+        top,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            rel,
+        ],
+        Duration::from_secs(10),
+    )?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    Ok(lossy(&output.stdout)
+        .split('\0')
+        .any(|entry| entry.starts_with("??")))
 }
 
 fn untracked_chunks(repo: &str, rel: &str) -> Vec<DiffChunkDto> {
@@ -6033,10 +6125,23 @@ pub fn smart_merge_conflict(repo: &str, path: &str) -> Result<String, String> {
     Ok(text)
 }
 
+/// 元数据只看文件开头：编码靠 BOM/UTF-8 校验，行尾靠换行计数，读开头 1MiB 足够判断。
+/// 以前是整文件 `fs::read`，几百 MB 的日志或产物文件会把一次选中拖成几十毫秒的内存拷贝。
+const META_SAMPLE_LIMIT: u64 = 1024 * 1024;
+
+fn read_head(full: PathBuf, limit: u64) -> Vec<u8> {
+    let Ok(file) = fs::File::open(full) else {
+        return Vec::new();
+    };
+    let mut bytes = Vec::new();
+    let _ = file.take(limit).read_to_end(&mut bytes);
+    bytes
+}
+
 pub fn inspect_file(repo: &str, path: &str) -> Result<FileMetaDto, String> {
     let top = validate_repo(repo)?;
     let rel = safe_rel(path)?;
-    let bytes = fs::read(Path::new(&top).join(rel)).unwrap_or_default();
+    let bytes = read_head(Path::new(&top).join(rel), META_SAMPLE_LIMIT);
     let encoding = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         "UTF-8 BOM"
     } else if bytes.starts_with(&[0xFF, 0xFE]) {
@@ -6205,7 +6310,7 @@ mod tests {
         assert_eq!(plan.status, "untracked");
         assert_eq!(plan.filename, "p0-development-plan.md");
         assert!(!files.iter().any(|file| file.filename.is_empty()), "directory entries must not become nameless files");
-        let diff = file_diff_opts(&path, "docs/p0-development-plan.md", false).unwrap();
+        let diff = file_diff_hinted(&path, "docs/p0-development-plan.md", false, None).unwrap();
         assert!(diff.iter().any(|chunk| chunk.lines.iter().any(|line| line.new_content.as_deref() == Some("# plan"))));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -6236,9 +6341,12 @@ mod tests {
         assert!(tags.iter().any(|tag| tag.name == "v0.1.0" && !tag.hash.is_empty()));
 
         fs::write(dir.join("a.txt"), "hello\nchanged\n").unwrap();
-        let diff = file_diff_opts(&path, "a.txt", false).unwrap();
+        let diff = file_diff_hinted(&path, "a.txt", false, None).unwrap();
         assert!(!diff.is_empty(), "expected a diff chunk");
         assert!(diff[0].lines.iter().any(|l| l.kind == "added"));
+        // 前端已知道未跟踪时必须走「新建文件」分支，不再自己扫整仓状态。
+        let new_file = file_diff_hinted(&path, "a.txt", false, Some(true)).unwrap();
+        assert_eq!(new_file[0].id, "new-a.txt");
         apply_chunk(&path, &diff[0].raw_patch, "stage").unwrap();
         let after = status_files(&path).unwrap();
         assert!(after[0].is_staged, "chunk stage should stage the file");

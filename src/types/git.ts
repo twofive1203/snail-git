@@ -60,6 +60,8 @@ export interface FileChange {
   additions: number;
   deletions: number;
   isStaged: boolean;
+  /** 后端给的内容指纹（mtime + 大小）；变化才需要重新拉 diff。 */
+  stamp?: string;
   chunks: DiffChunk[];
   chunksLoaded?: boolean;
 }
