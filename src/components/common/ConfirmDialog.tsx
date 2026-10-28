@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { AlertTriangle, ArrowRight, GitMerge, Info, Loader2, X } from 'lucide-react';
 import { useI18n } from '../../i18n/react';
+import { CommandBlock } from './CommandBlock';
 
 export interface ConfirmAction {
   /** 选择该动作时回传给后端的值，对应 git_ops::update_response。 */
@@ -19,6 +20,9 @@ interface ConfirmDialogProps {
   /** 高亮列出的文件路径，用等宽字体逐条展示。 */
   files?: string[];
   filesHint?: string;
+  commands?: string[];
+  commandsHint?: string;
+  copyText?: string;
   actions: ConfirmAction[];
   onChoose: (value: string) => void;
   onCancel: () => void;
@@ -47,6 +51,9 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   message,
   files,
   filesHint,
+  commands,
+  commandsHint,
+  copyText,
   actions,
   onChoose,
   onCancel,
@@ -94,7 +101,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         ref={cardRef}
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-[440px] max-h-[80vh] bg-jb-panel border border-jb-border rounded-lg shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-xs"
+        className={`w-full ${commands && commands.length > 0 ? 'max-w-[640px]' : 'max-w-[440px]'} max-h-[80vh] bg-jb-panel border border-jb-border rounded-lg shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-xs`}
       >
         <div className="flex items-start justify-between px-4 pt-3.5 pb-2">
           <div className="flex items-center space-x-2 min-w-0">
@@ -136,6 +143,10 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                 ))}
               </ul>
             </div>
+          )}
+
+          {commands && commands.length > 0 && (
+            <CommandBlock commands={commands} hint={commandsHint} copyText={copyText} />
           )}
 
           {busy && (

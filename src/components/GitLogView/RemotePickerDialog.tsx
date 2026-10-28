@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { useI18n } from '../../i18n/react';
+import { CommandBlock } from '../common/CommandBlock';
 
 interface RemotePickerDialogProps {
   open: boolean;
@@ -10,6 +11,8 @@ interface RemotePickerDialogProps {
   confirmLabel: string;
   tone?: 'primary' | 'danger';
   remotes: string[];
+  /** 随当前选中的远程变化。推送标签不传，避免在非破坏性动作上加命令区。 */
+  command?: (remote: string) => string;
   busy?: boolean;
   error?: string;
   onCancel: () => void;
@@ -24,6 +27,7 @@ export const RemotePickerDialog: React.FC<RemotePickerDialogProps> = ({
   confirmLabel,
   tone = 'primary',
   remotes,
+  command,
   busy = false,
   error = '',
   onCancel,
@@ -96,6 +100,9 @@ export const RemotePickerDialog: React.FC<RemotePickerDialogProps> = ({
               ))}
             </select>
           </label>
+          {command && remote && (
+            <CommandBlock commands={[command(remote)]} />
+          )}
           {error && (
             <div className="rounded border border-rose-500/40 bg-rose-500/10 text-rose-200 px-2.5 py-1.5 leading-relaxed whitespace-pre-wrap">
               {error}

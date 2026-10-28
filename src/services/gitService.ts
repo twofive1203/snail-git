@@ -367,6 +367,12 @@ export interface SquashPreview {
   pushedOn: string[];
   alsoOn: string[];
   hasLocalChanges: boolean;
+  /** 软重置目标：最旧选中提交的父提交。 */
+  oldestParent: string;
+  /** 执行时会带上的 --author。空表示不加。 */
+  authorArg: string;
+  /** 非空时作为 GIT_AUTHOR_DATE 与 GIT_COMMITTER_DATE。 */
+  committedAt: string;
 }
 
 export async function previewSquash(repoPath: string, hashes: string[]): Promise<SquashPreview> {

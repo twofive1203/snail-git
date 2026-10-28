@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { AddProjectModal } from './AddProjectModal';
 import { askConfirm } from '../common/askConfirm';
+import { formatGitCommand } from '../common/formatGitCommand';
 import { askInput } from '../common/askInput';
 import { useI18n } from '../../i18n/react';
 
@@ -78,6 +79,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onCreateStash,
 }) => {
   const { t } = useI18n();
+  const repoPath = repositories.find(repo => repo.id === activeRepoId)?.path ?? '';
   const [activeTab, setActiveTab] = useState<SidebarTab>('repos');
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState('');
@@ -595,6 +597,9 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                                       message: t('shelf.dropConfirm', { name }),
                                       confirmLabel: t('confirm.drop'),
                                       tone: 'danger',
+                                      commands: repoPath
+                                        ? [formatGitCommand(repoPath, ['stash', 'drop', `stash@{${stash.index}}`])]
+                                        : undefined,
                                     }).then(ok => {
                                       if (ok) onDropStash?.(stash);
                                     });

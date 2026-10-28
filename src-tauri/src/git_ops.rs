@@ -4568,6 +4568,12 @@ pub struct SquashPreview {
     pub pushed_on: Vec<String>,
     pub also_on: Vec<String>,
     pub has_local_changes: bool,
+    /// 软重置的目标，即选中范围最旧提交的父提交。只用于确认框展示，不改变压缩过程。
+    pub oldest_parent: String,
+    /// 与 create_squashed_commit 相同：最旧提交的 --author。无效时为空，执行时不加该参数。
+    pub author_arg: String,
+    /// 最新选中提交的时间。非空时写入 GIT_AUTHOR_DATE 与 GIT_COMMITTER_DATE。
+    pub committed_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -4947,6 +4953,9 @@ fn preview_from_plan(plan: &SquashPlan, has_local_changes: bool) -> SquashPrevie
         pushed_on: plan.pushed_on.clone(),
         also_on: plan.also_on.clone(),
         has_local_changes,
+        oldest_parent: plan.oldest_parent.clone(),
+        author_arg: plan.commits.first().and_then(squash_author_arg).unwrap_or_default(),
+        committed_at: plan.committed_at.clone(),
     }
 }
 

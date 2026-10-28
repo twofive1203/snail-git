@@ -12,9 +12,11 @@ import {
   Download
 } from 'lucide-react';
 import { askConfirm } from '../common/askConfirm';
+import { formatGitCommand } from '../common/formatGitCommand';
 import { useI18n } from '../../i18n/react';
 
 interface ShelfStashViewProps {
+  repoPath?: string;
   shelves: ShelfItem[];
   stashes: StashItem[];
   onUnshelve: (shelfId: string) => void;
@@ -30,6 +32,7 @@ interface ShelfStashViewProps {
 }
 
 export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
+  repoPath = '',
   shelves: initialShelves,
   stashes: initialStashes,
   onUnshelve,
@@ -80,6 +83,9 @@ export const ShelfStashView: React.FC<ShelfStashViewProps> = ({
       message: t('shelf.dropConfirm', { name }),
       confirmLabel: t('confirm.drop'),
       tone: 'danger',
+      commands: repoPath
+        ? [formatGitCommand(repoPath, ['stash', 'drop', `stash@{${stash.index}}`])]
+        : undefined,
     }).then(ok => {
       if (!ok) return;
       if (onDropStash) onDropStash(stash);

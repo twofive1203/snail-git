@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowUp, Loader2, RefreshCw, X } from 'lucide-react';
 import { FileChangeStatus, GitCommit } from '../types/git';
 import { previewPush, type PushPreview, type PushTarget } from '../services/gitService';
+import { askConfirm } from './common/askConfirm';
+import { formatGitCommand } from './common/formatGitCommand';
 import { FilePathDisplay } from './common/FilePathDisplay';
 import { useI18n } from '../i18n/react';
 
@@ -409,13 +411,33 @@ export const PushDialog: React.FC<PushDialogProps> = ({
           </button>
           <button
             ref={pushRef}
-            onClick={() => canPush && onPush({
-              remote,
-              branch: branchName,
-              setUpstream,
-              source: sourceBranch || undefined,
-              force: forceOffered ? force : false,
-            })}
+            onClick={() => {
+              if (!canPush) return;
+              const target = {
+                remote,
+                branch: branchName,
+                setUpstream,
+                source: sourceBranch || undefined,
+                force: forceOffered ? force : false,
+              };
+              if (!target.force) {
+                onPush(target);
+                return;
+              }
+              const local = sourceBranch || preview?.localBranch || '';
+              const args = ['push', '--progress'];
+              if (setUpstream) args.push('--set-upstream');
+              args.push('--force-with-lease', remote, `${local}:${branchName}`);
+              void askConfirm({
+                title: t('confirm.forcePushTitle'),
+                message: t('confirm.forcePush'),
+                confirmLabel: t('push.actionForce'),
+                tone: 'danger',
+                commands: [formatGitCommand(repoPath, args)],
+              }).then(ok => {
+                if (ok) onPush(target);
+              });
+            }}
             disabled={!canPush}
             className={`px-3 py-1.5 rounded font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
               force

@@ -5,6 +5,12 @@ export interface AskConfirmOptions {
   /** primary 蓝色实心，danger 红色描边，default 普通描边。 */
   tone?: 'primary' | 'danger' | 'default';
   files?: string[];
+  /** 等宽展示的命令或动作。不传或空数组时确认框不出现命令区。 */
+  commands?: string[];
+  /** 命令区标题下的补充说明，例如补丁走标准输入。 */
+  commandsHint?: string;
+  /** 复制按钮写入的全文。缺省时复制 commands，每条一行。 */
+  copyText?: string;
 }
 
 export interface AskInputOptions {

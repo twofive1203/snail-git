@@ -57,6 +57,6 @@ Windows 优先：git 可执行文件解析（避开 `git.cmd` 包装器）、子
 
 - `docs/design-specification.md`、`docs/ux-iteration-roadmap.md` 是**历史规划**，其中的任务已落地。与代码冲突时以代码为准，不要按旧施工步骤重做。
 - `docs/plans/2026-08-14-001-feat-branch-panel-actions-plan.md`、`docs/plans/2026-10-18-002-feat-backlog-five-items-plan.md` 是**已完成**计划。2026-08-14 里「用系统 `prompt` 重命名」已被 `askInput` 取代，不要恢复 `window.prompt`。
-- `docs/brainstorms/2026-10-27-oss-readiness-requirements.md` 与 `docs/plans/2026-10-27-001-feat-oss-readiness-plan.md` 是**未实现/待办**（协议、贡献说明、危险操作前展示命令）。不要当成已完成，也不要在未被要求时实现。
+- `docs/brainstorms/2026-10-27-oss-readiness-requirements.md` 与 `docs/plans/2026-10-27-001-feat-oss-readiness-plan.md` 的开源门槛**已落地**（MIT、`CONTRIBUTING.md`、Windows 检查工作流、危险操作前展示命令）。不要再按该计划重做，也不要借此扩功能。截图仍待用户提供的 Windows 实机图。
 - 不要在文档里复制整段实现代码作为“示范”，写文件路径与约束即可（代码会漂移，文档不会自动同步）。
 - 新增/修改文档时，只描述**当前代码真实支持**的能力；未实现的内容必须显式标注“未实现/待办”。

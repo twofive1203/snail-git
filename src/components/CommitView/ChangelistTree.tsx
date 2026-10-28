@@ -15,6 +15,7 @@ import {
   Minus
 } from 'lucide-react';
 import { askConfirm } from '../common/askConfirm';
+import { filesystemAction } from '../common/formatGitCommand';
 import { askInput } from '../common/askInput';
 import { useI18n } from '../../i18n/react';
 
@@ -885,6 +886,7 @@ const ChangelistTreeInner: React.FC<ChangelistTreeProps> = ({
                   confirmLabel: t('common.delete'),
                   tone: 'danger',
                   files: [file.path],
+                  commands: [filesystemAction(t('confirm.deleteDisk'), file.path)],
                 }).then(ok => {
                   if (ok) onDeleteUnversioned?.(file);
                 });

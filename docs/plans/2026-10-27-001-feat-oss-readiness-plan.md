@@ -1,7 +1,7 @@
 ---
 title: feat: 补齐开源门槛
 type: feat
-status: active
+status: completed
 date: 2026-10-27
 origin: docs/brainstorms/2026-10-27-oss-readiness-requirements.md
 deepened: 2026-10-27
@@ -9,7 +9,7 @@ deepened: 2026-10-27
 
 # feat: 补齐开源门槛
 
-> **未实现/待办。** 下面的实现单元都未勾选。不要把本文当成已完成计划，也不要在未被要求时开工。
+> **已实现。** 协议、README 边界、确认框命令、贡献说明和 Windows 检查工作流已落地。截图仍待用户提供实机图。不要借这次改动扩功能。
 
 ## Overview
 
@@ -116,6 +116,12 @@ deepened: 2026-10-27
 - 重命名文件的丢弃步骤：实现时按 `discard_paths` 对 `old_path` 的现有分支逐条列出，不改该分支。
 - Windows 检查工作流的安装步骤：以实现时仓库里的包管理器和工具链为准，不在计划里写死动作版本。
 
+### Resolved During Implementation
+
+- 压缩步骤需要最旧提交的父提交、`--author` 和提交时间。`SquashPreview` 增加了只读字段 `oldestParent`、`authorArg`、`committedAt`。压缩写路径没有改。
+- 含空格或 PowerShell 会解释的符号（如 `stash@{n}` 的花括号）在复制文本里加双引号。仓库路径始终加引号。
+- 新增文件的丢弃会先写 `restore --staged`，再写移入回收站。未跟踪文件只写回收站。
+
 ---
 
 ## High-Level Technical Design
@@ -149,7 +155,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] U1. **公开身份与能力边界**
+- [x] U1. **公开身份与能力边界**
 
 **Goal:** 访客能从仓库根和 README 判断 MIT、仅 Windows、日志有上限。
 
@@ -185,7 +191,7 @@ flowchart TB
 
 ---
 
-- [ ] U2. **确认框可展示并复制命令**
+- [x] U2. **确认框可展示并复制命令**
 
 **Goal:** 现有确认框能显示一组等宽文本，并一次复制全部。
 
@@ -222,7 +228,7 @@ flowchart TB
 
 ---
 
-- [ ] U3. **单条 git 命令的危险操作**
+- [x] U3. **单条 git 命令的危险操作**
 
 **Goal:** 参数与后端一致的危险操作，在现有确认里展示可复制命令。
 
@@ -270,7 +276,7 @@ flowchart TB
 
 ---
 
-- [ ] U4. **不是单条命令的危险操作**
+- [x] U4. **不是单条命令的危险操作**
 
 **Goal:** 丢弃、删文件、块回滚和压缩提交也能在执行前核对，且不伪造 git 命令。
 
@@ -309,7 +315,7 @@ flowchart TB
 
 ---
 
-- [ ] U5. **贡献说明与 Windows 检查**
+- [x] U5. **贡献说明与 Windows 检查**
 
 **Goal:** 贡献者知道如何在 Windows 上启动和检查，并且仓库里有对应的自动化文件。
 

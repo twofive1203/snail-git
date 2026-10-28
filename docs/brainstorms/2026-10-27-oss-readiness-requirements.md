@@ -5,7 +5,7 @@ topic: oss-readiness
 
 # 开源门槛：可公开、可信任、不扩功能
 
-> **未实现/待办。** 对应计划是 `docs/plans/2026-10-27-001-feat-oss-readiness-plan.md`，复选框都未勾。本文是需求，不是已完成记录。
+> **已实现。** 对应计划 `docs/plans/2026-10-27-001-feat-oss-readiness-plan.md` 的实现单元已勾选。本文仍是需求记录。截图仍待 Windows 实机图，不能用生成图补。
 
 ## Problem Frame
 
@@ -137,4 +137,4 @@ SnailGit 已经能满足作者自己的日常 Git 操作，但还不能诚实地
 
 ## Next Steps
 
-计划已写在 `docs/plans/2026-10-27-001-feat-oss-readiness-plan.md`。实现状态：**未实现/待办**。
+计划已写在 `docs/plans/2026-10-27-001-feat-oss-readiness-plan.md`。实现状态：**已实现**。截图仍待补。

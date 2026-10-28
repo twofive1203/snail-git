@@ -3,6 +3,7 @@ import { Check, Cloud, Copy, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from 
 import { GitRemote, RemoteList } from '../types/git';
 import { addRemote, listRemotes, removeRemote, renameRemote, setRemoteUrl } from '../services/gitService';
 import { askConfirm } from './common/askConfirm';
+import { formatGitCommand } from './common/formatGitCommand';
 import { useI18n } from '../i18n/react';
 
 interface RemotesModalProps {
@@ -111,6 +112,7 @@ export const RemotesModal: React.FC<RemotesModalProps> = ({
       title: t('confirm.removeRemoteTitle'),
       message: t('remotes.removeConfirm', { name }),
       confirmLabel: t('confirm.remove'),
+      commands: [formatGitCommand(repoPath, ['remote', 'remove', name])],
     });
     if (!ok) return;
     setSaving(true);

@@ -87,6 +87,7 @@ import {
   type UpdateResponse,
 } from './services/gitService';
 import { askConfirm, isAskConfirmOpen } from './components/common/askConfirm';
+import { chunkRollbackPreview, deleteBranchCommand, discardCommandLines, formatGitCommand } from './components/common/formatGitCommand';
 import { askInput } from './components/common/askInput';
 import { ConfirmHost } from './components/common/ConfirmHost';
 import { ConfirmDialog, type ConfirmAction } from './components/common/ConfirmDialog';
@@ -639,11 +640,16 @@ export function App() {
   const handleAbortOperation = useCallback(() => {
     if (!activeRepo) return;
     const repoPath = activeRepo.path;
+    const operation = operationState?.operation;
+    const abortCommand = operation === 'merge' || operation === 'rebase' || operation === 'cherry-pick' || operation === 'revert'
+      ? formatGitCommand(repoPath, [operation, '--abort'])
+      : '';
     void askConfirm({
       title: t('confirm.abortOperationTitle'),
       message: t('app.operation.abortConfirm'),
       confirmLabel: t('confirm.abortOperation'),
       tone: 'danger',
+      commands: abortCommand ? [abortCommand] : undefined,
     }).then(ok => {
       if (!ok) return;
       void run(t('toast.operationAborted'), async () => {
@@ -652,7 +658,7 @@ export function App() {
         return t('toast.operationAborted');
       });
     });
-  }, [activeRepo, run, t]);
+  }, [activeRepo, operationState?.operation, run, t]);
 
   const chooseConfirm = useCallback((value: string) => {
     const pending = pendingConfirm;
@@ -905,11 +911,15 @@ export function App() {
     if (!chunk?.rawPatch || !activeRepo) return;
     const repoPath = activeRepo.path;
     const patch = chunk.rawPatch;
+    const rollback = chunkRollbackPreview(repoPath, patch);
     void askConfirm({
       title: t('confirm.discardChunkTitle'),
       message: t('toast.chunkDiscardConfirm'),
       confirmLabel: t('confirm.discard'),
       tone: 'danger',
+      commands: rollback.commands,
+      commandsHint: t('confirm.patchStdin'),
+      copyText: rollback.copyText,
     }).then(ok => {
       if (!ok) return;
       markDiffDirty(file.id);
@@ -1123,6 +1133,7 @@ export function App() {
         message: warning,
         confirmLabel: t('common.delete'),
         tone: 'danger',
+        commands: deleteBranchCommand(activeRepo.path, branch, false),
       });
       if (!ok) return;
     }
@@ -1138,6 +1149,7 @@ export function App() {
           message: t('toast.forceDeleteBranch'),
           confirmLabel: t('confirm.forceDelete'),
           tone: 'danger',
+          commands: deleteBranchCommand(activeRepo.path, branch, true),
         });
         if (forceDelete) await handleDeleteBranch(branch, true);
         return;
@@ -1324,6 +1336,7 @@ export function App() {
             confirmLabel: t('confirm.rollback'),
             tone: 'danger',
             files: paths,
+            commands: discardCommandLines(repoPath, changes, t('confirm.recycle')),
           }).then(ok => {
             if (ok) void run(t('toast.rolledBack'), () => discardPaths(repoPath, paths));
           });
@@ -1480,6 +1493,7 @@ export function App() {
                   confirmLabel: t('confirm.rollback'),
                   tone: 'danger',
                   files: [file.path],
+                  commands: discardCommandLines(repoPath, [file], t('confirm.recycle')),
                 }).then(ok => {
                   if (ok) void run(t('toast.fileRolledBack'), () => discardPaths(repoPath, [file.path]));
                 });
@@ -1538,6 +1552,7 @@ export function App() {
           {activeRepo && activeTab === 'shelf' && (
             <div data-keyboard-root="shelf" tabIndex={-1} className="flex-1 flex flex-col min-h-0 focus:outline-none">
             <ShelfStashView
+              repoPath={activeRepo.path}
               shelves={shelves}
               stashes={stashes}
               onUnshelve={(id) => void run(t('toast.unshelved'), () => unshelve(activeRepo.path, id))}
@@ -1759,6 +1774,9 @@ export function App() {
         confirmLabel={tagRemote?.mode === 'delete' ? t('tag.deleteRemote') : t('tag.push')}
         tone={tagRemote?.mode === 'delete' ? 'danger' : 'primary'}
         remotes={tagRemote?.remotes ?? []}
+        command={tagRemote?.mode === 'delete' && activeRepo
+          ? (remote) => formatGitCommand(activeRepo.path, ['push', '--progress', remote, `:refs/tags/${tagRemote.name}`])
+          : undefined}
         busy={tagBusy}
         error={tagError}
         onCancel={() => {

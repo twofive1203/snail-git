@@ -650,6 +650,7 @@ export const GitLogView: React.FC<GitLogViewProps> = ({
         onCherryPick={onCherryPick}
         onRevert={onRevert}
         onReset={onReset}
+        repoPath={repoPath}
         onCreateBranch={onCreateBranch}
         onCreateTag={onCreateTag ? (hash) => onCreateTag(hash, hash.slice(0, 8)) : undefined}
         onCompareBranch={onCompareBranch}

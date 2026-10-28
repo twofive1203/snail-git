@@ -22,6 +22,9 @@ export function ConfirmHost() {
         title={confirm?.title ?? ''}
         message={confirm?.message ?? ''}
         files={confirm?.files}
+        commands={confirm?.commands}
+        commandsHint={confirm?.commandsHint}
+        copyText={confirm?.copyText}
         actions={confirm ? [{
           value: 'ok',
           label: confirm.confirmLabel,

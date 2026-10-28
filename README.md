@@ -1,6 +1,12 @@
+# SnailGit
+
+> A lightweight IntelliJ IDEA-style Git client. MIT License. Verified on Windows only (NSIS installer). Not a GitHub or GitLab pull-request client. The log loads 200 commits per page and stops at 20,000.
+
+中文说明如下。Linux 与 macOS 尚未支持，欢迎贡献。没有这两个平台的安装包或下载入口。
+
 # SnailGit 🚀
 
-> 面向 Windows 的轻量 IntelliJ IDEA 风格 Git 客户端。常驻内存以状态栏里的进程 RSS 为准，目标 < 60MB。
+> 面向 Windows 的轻量 IntelliJ IDEA 风格 Git 客户端，采用 [MIT License](LICENSE)。常驻内存以状态栏里的进程 RSS 为准，目标 < 60MB，不保证任何仓库都低于该数。日志每页 200 条，继续加载最多到 2 万条后停止；已加载的行整页渲染，没有虚拟滚动，不保证大仓库丝滑。
 
 [![Vite](https://img.shields.io/badge/Vite-6.x-646CFF.svg)](https://vitejs.dev/)
 [![React](https://img.shields.io/badge/React-18.x-61DAFB.svg)](https://reactjs.org/)
@@ -18,7 +24,7 @@
 
 > 浏览器模式（`pnpm dev`）仅是开发预览：非 Tauri 环境下使用 `src/mock/gitData.ts` 假数据，不可读写真实仓库。AI 协作约束见 [AGENTS.md](AGENTS.md)。
 >
-> 仓库根目录目前**没有 `LICENSE`**，不能把本项目称为已开源。补协议、贡献说明，以及在危险写操作前展示真实命令，见 `docs/plans/2026-10-27-001-feat-oss-readiness-plan.md`（**未实现/待办**）。
+> 协议是根目录的 [MIT License](LICENSE)。这是桌面应用，不是 npm 库，`package.json` 保持 `"private": true`。贡献、Windows 启动和现有检查见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ---
 
@@ -88,7 +94,17 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
-`src-tauri/tauri.conf.json` 当前只配置了 Windows NSIS 目标（`bundle.targets: ["nsis"]`，`currentUser` 安装模式），产出 `.exe` 安装器。macOS / Linux 打包目标尚未配置。
+`src-tauri/tauri.conf.json` 当前只配置了 Windows NSIS 目标（`bundle.targets: ["nsis"]`，`currentUser` 安装模式），产出 `.exe` 安装器。macOS / Linux 未支持，也没有对应打包目标或下载入口，欢迎贡献。
+
+`.github/workflows/windows-check.yml` 只在 Windows 上跑现有的类型检查、前端 lint 和 Rust 测试。仓库公开到 GitHub 之后它才会在远程执行；现在还没有挂上远程检查，本仓库不据此声称检查已经在跑。
+
+## 界面截图
+
+下面三张都还没有 Windows 实机图。**截图待补**。不要用生成图或浏览器 mock 填这三处。
+
+1. 日志拓扑：截图待补
+2. 提交与双栏 diff：截图待补
+3. Shelf 或三方合并：截图待补
 
 ---
 

@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Combine, Loader2, X } from 'lucide-react';
 import { useI18n } from '../../i18n/react';
 import { isTauriEnvironment, previewSquash, type SquashPreview } from '../../services/gitService';
+import { CommandBlock } from '../common/CommandBlock';
+import { squashCommandLines } from '../common/formatGitCommand';
 
 interface SquashDialogProps {
   open: boolean;
@@ -206,6 +208,12 @@ export const SquashDialog: React.FC<SquashDialogProps> = ({
                   className="w-full min-h-[120px] max-h-56 resize-y rounded border border-jb-border bg-jb-bg px-2.5 py-2 text-jb-text-primary placeholder:text-jb-text-muted focus:outline-none focus:border-jb-blue select-text"
                 />
               </label>
+              {!loading && (
+                <CommandBlock
+                  commands={squashCommandLines(repoPath, preview, message)}
+                  hint={t('squash.messageFile')}
+                />
+              )}
             </>
           )}
 

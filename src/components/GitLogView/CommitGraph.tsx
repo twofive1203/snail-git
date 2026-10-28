@@ -13,6 +13,7 @@ import {
   Combine,
 } from 'lucide-react';
 import { askConfirm } from '../common/askConfirm';
+import { formatGitCommand } from '../common/formatGitCommand';
 import { useI18n } from '../../i18n/react';
 import { inspectSquashSelection, type SquashIssue } from './squashSelection';
 import {
@@ -85,6 +86,7 @@ interface CommitGraphProps {
   onCherryPick?: (hash: string) => void;
   onRevert?: (hash: string) => void;
   onReset?: (hash: string) => void;
+  repoPath?: string;
   onCreateBranch?: (hash: string) => void;
   onCreateTag?: (hash: string) => void;
   onCompareBranch?: (name: string) => void;
@@ -261,6 +263,7 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
   onCherryPick,
   onRevert,
   onReset,
+  repoPath = '',
   onCreateBranch,
   onCreateTag,
   onCompareBranch,
@@ -743,6 +746,9 @@ export const CommitGraph: React.FC<CommitGraphProps> = ({
                 message: t('graph.resetConfirm', { hash: commit.shortHash }),
                 confirmLabel: t('confirm.reset'),
                 tone: 'danger',
+                commands: repoPath
+                  ? [formatGitCommand(repoPath, ['reset', '--mixed', '--', commit.hash])]
+                  : undefined,
               }).then(ok => {
                 if (ok) onReset?.(commit.hash);
               });
