@@ -91,7 +91,7 @@ date: 2026-10-18
 同时返回 `unmergedPaths`（复用现成的 `unmerged_paths`），前端据此禁用「继续」。
 
 **继续**：
-- `rebase --continue`、`cherry-pick --continue`、`revert --continue` 都会走到 `git commit`，**会调编辑器**。`run_git` 走 `git_base`，它**没有**设 `GIT_EDITOR`（只有 `git_network` 在 `git_ops.rs:540` 设了）。因此继续类命令必须用 `run_git_with_env` 显式传 `GIT_EDITOR=false`、`GIT_SEQUENCE_EDITOR=false`，或改用 `-c core.editor=false`。
+- `rebase --continue`、`cherry-pick --continue`、`revert --continue` 都会走到 `git commit`，**会调编辑器**。下面草稿写的是 `GIT_EDITOR=false`。**未采用。** 实际取舍见本节顶部：`GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` 取 `true`，让 git 接受默认提交信息；`false` 会直接失败。
 - 合并的继续是 `git commit --no-edit --no-verify`（仓库已有 `commit_pending_merge` 实现，直接复用，不要重写）。但注意它遇到未解决冲突时返回 `"none"` 而不是报错——新命令要先把「还有冲突」变成明确错误，否则用户点继续没有任何反馈。
 - 变基继续成功后可能还有下一个冲突，此时状态仍是 rebasing；返回里带上新状态，前端不当作失败。
 
@@ -397,7 +397,7 @@ date: 2026-10-18
 
 | 风险 | 缓解 |
 | :--- | :--- |
-| §A 的 `--continue` 拉起编辑器导致进程挂死 | 显式 `GIT_EDITOR=false`；测试里用超时反向验证 |
+| §A 的 `--continue` 拉起编辑器导致进程挂死 | 实际用 `GIT_EDITOR=true`（接受默认说明）。草稿里的 `false` 会让 git 直接失败，不要改回去 |
 | §A 把「还有冲突」当成 `"none"` 静默成功（`commit_pending_merge` 现有行为） | 新命令先判 `unmerged_paths`，非空即报错 |
 | §B 复用分支名校验，漏掉 tag 特有的非法字符 | 独立 `validate_tag_name`，逐条列出禁用字符并加测试 |
 | §B 附注 tag 缺 `user.name` 时透传 git 原始英文错误 | 先用 `configured_user_name` 预检，给中文错误 |

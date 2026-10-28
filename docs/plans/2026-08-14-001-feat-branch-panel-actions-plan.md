@@ -7,6 +7,8 @@ date: 2026-08-14
 
 # feat: 左侧分支栏默认折叠与更新推送重命名
 
+> **已完成，不要按正文里的「现状」重做。** 重命名输入后来改为 `askInput`（见 `docs/plans/2026-10-18-002-feat-backlog-five-items-plan.md` §C），不要恢复 `window.prompt`。`list_branches` 返回的 `upstream` 至今仍是 `None`；非当前分支的上游由更新和推送命令自己解析，这不是待办。
+
 ## Overview
 
 日志页左侧分支栏（`src/components/GitLogView/BranchPanel.tsx`）打开时远程和标签默认收起，本地分支保持展开。本地分支右键补上 IDEA 里已有、这里还没有的「更新」「推送…」「重命名…」。

@@ -11,8 +11,8 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 - **轻量替代品痛点**：现有的轻量客户端中，GitKraken 资源占用同样偏大且商业收费，Sourcetree 界面老旧卡顿，VS Code 的 Git 体验相较于 IDEA 在双栏 Diff、Shelf（架藏）、3-Way Merge 冲突解决和拓扑图上存在明显差距。
 
 ### 1.2 SnailGit 的核心目标
-- **极致轻量**：运行时常驻内存目标 **< 60MB**（界面状态栏展示真实进程 RSS），毫秒级瞬间秒开。
-- **1:1 复刻 IDEA 核心手感**：
+- **极致轻量**：运行时常驻内存目标 **< 60MB**（顶栏与状态栏展示真实进程 RSS）。秒级启动是目标，不是已测量承诺。
+- **对齐 IDEA 的核心 Git 手感**（不是完整复刻；blame、交互式 rebase、PR 客户端均未实现）：
   1. JetBrains New UI 暗黑高质感视觉体系；
   2. 丝滑的多轨道彩色贝塞尔曲线 Git Log 拓扑图谱；
   3. Default Changelist 与 Unversioned Files 的变更树管理；
@@ -44,7 +44,7 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 [前端表现层]  src/（React 18 + TypeScript + Vite 6 + Tailwind 3）
 ├── JetBrains New UI 配色：tailwind.config.js 的 jb-* 令牌（jb-bg/#1E1F22、jb-panel/#2B2D30、jb-blue/#3574F0 …）
 ├── 组件树：GitLogView / CommitView / ShelfStashView / BranchesModal / ThreeWayMergeModal / ProjectSidebar / common
-├── SVG 拓扑：gitLogView/graphLayout.ts 计算轨道，CommitGraph.tsx 渲染；列表为分页加载 + 全量渲染，**无虚拟化**
+├── SVG 拓扑：src/components/GitLogView/graphLayout.ts 计算轨道，CommitGraph.tsx 渲染；每页 200 条，最多加载 2 万条，已加载行整页渲染，**无虚拟化**
 └── i18n：src/i18n/messages.ts 中英双表 + useI18n().t()
 
                      │ Tauri IPC（invoke，唯一通道；无 REST / WebSocket）
@@ -73,17 +73,18 @@ IntelliJ IDEA 的 Git 工具窗口（Version Control / Git Tool Window）在开�
 
 ---
 
-## 四、 本次交付物包含的内容
+## 四、 立项时的界面清单（不是当前能力全表）
 
-1. **完整前端工程脚手架**：Vite 6 + React 18 + TypeScript + Tailwind CSS，配置完善，支持独立热重载开发与一键静态构建发布。
-2. **主题设计规范**：复刻 JetBrains New UI 标准色值（`#1E1F22`, `#2B2D30`, `#3574F0`, `#59A869`, `#E35967` 等）。
-3. **浏览器预览兜底数据 (`src/mock/gitData.ts`)**：涵盖多分支并行拓扑、双栏修改 Diff、架藏与 Stash 列表。
-   - **仅在浏览器预览下生效**：`App.tsx` 以 `import.meta.env.DEV && !isTauriEnvironment()` 条件动态 import，正式产物与 Tauri 环境全部走真实 git。
-4. **核心交互界面与组件**：
-   - `Header.tsx`：顶部工具栏与内存指示（每 8s 调 `process_memory_mb` 展示真实进程 RSS；浏览器预览下退化为 JS heap）
-   - `GitLogView/`：带 SVG 贝塞尔多分支连线、多维过滤、变更文件树与详情抽屉
-   - `CommitView/`：Default Changelist 树、Side-by-Side 双栏 Diff（含行内高亮与块级暂存控制器）、复合提交动作栏
-   - `BranchesModal.tsx`：全功能分支弹窗，支持即时过滤与右键操作
-   - `ShelfStashView/`：Shelf 与 Stash 分栏管理
-   - `ThreeWayMergeModal.tsx`：经典三栏三方冲突解决器
-   - `StatusBar.tsx`：底部状态栏
+当前能力以仓库根目录 `README.md` 的对照表为准。下面只保留仍然成立的入口，避免把原型清单当成全部功能。
+
+1. **前端工程**：Vite 6 + React 18 + TypeScript + Tailwind CSS。`pnpm dev` 只供浏览器预览。
+2. **主题**：JetBrains New UI 色值进了 `tailwind.config.js` 的 `jb-*` 令牌。组件里仍有历史硬编码色，新代码不要再扩散。
+3. **浏览器预览数据 (`src/mock/gitData.ts`)**：只在 `import.meta.env.DEV && !isTauriEnvironment()` 时动态 import。正式产物与 Tauri 环境走真实 git。
+4. **当时就有、现在仍在的界面**：
+   - `App.tsx` 每 8 秒调 `process_memory_mb`，把 RSS 传给 `Header.tsx` 和 `StatusBar.tsx`。浏览器预览没有该命令时退化为 JS heap。
+   - `GitLogView/`：SVG 拓扑、过滤、变更文件树与详情。提交和分支行的右键在 `CommitGraph.tsx`、`BranchPanel.tsx`，不在 `BranchesModal.tsx`。
+   - `CommitView/`：变更树、双栏 Diff、块级暂存。
+   - `BranchesModal.tsx`：搜索，以及检出、合并、变基、与当前比较。它不是右键菜单。
+   - `ShelfStashView/`：Shelf 与 Stash。
+   - `ThreeWayMergeModal.tsx`：三栏冲突解决。
+5. **清单写成之后才落地、这里不再展开的能力**（远程、标签、Squash、推送、操作条、无边框标题栏等）见 `README.md`。

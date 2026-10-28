@@ -1,6 +1,6 @@
 # SnailGit 🚀
 
-> 极致轻量、内存占用 < 60MB 的开源 IntelliJ IDEA 风格 Git 管理工具。
+> 面向 Windows 的轻量 IntelliJ IDEA 风格 Git 客户端。常驻内存以状态栏里的进程 RSS 为准，目标 < 60MB。
 
 [![Vite](https://img.shields.io/badge/Vite-6.x-646CFF.svg)](https://vitejs.dev/)
 [![React](https://img.shields.io/badge/React-18.x-61DAFB.svg)](https://reactjs.org/)
@@ -14,13 +14,15 @@
 
 然而，IDEA 作为一个重型 IDE，往往需要占用 **2.5 GB ~ 4 GB+** 的内存，并伴随着漫长的启动时间和频繁的索引构建。如果只是想快速查看 Git 历史、对比分支、提交代码或挑拣提交（Cherry-pick），启动 IDEA 极其沉重。
 
-**SnailGit 的目标就是将 IDEA 的 Git 核心体验完全复刻并独立出来**，以 **Tauri 2 原生桌面应用**为主路径（已落地），将常驻内存从几千兆压减到 **< 60MB**（界面状态栏展示真实进程 RSS），秒级启动，手感丝滑。
+**SnailGit 把 IDEA 里常用的 Git 操作做成独立桌面应用**，主路径是已落地的 **Tauri 2**。它不是 IDEA 的完整复刻，也没有 blame、交互式 rebase、GitHub/GitLab PR 客户端。常驻内存目标 **< 60MB**，以窗口状态栏的真实进程 RSS 为准，不保证任何仓库都低于该数。
 
 > 浏览器模式（`pnpm dev`）仅是开发预览：非 Tauri 环境下使用 `src/mock/gitData.ts` 假数据，不可读写真实仓库。AI 协作约束见 [AGENTS.md](AGENTS.md)。
+>
+> 仓库根目录目前**没有 `LICENSE`**，不能把本项目称为已开源。补协议、贡献说明，以及在危险写操作前展示真实命令，见 `docs/plans/2026-10-27-001-feat-oss-readiness-plan.md`（**未实现/待办**）。
 
 ---
 
-## ✨ 核心特性（1:1 复刻 IDEA）
+## ✨ 已实现的核心能力
 
 0. **多项目仓库管理侧边栏 (Repositories Sidebar)**
    - 最左侧常驻项目列表，支持展开/折叠双模式（紧凑图标模式 vs 完整列表模式）
@@ -79,7 +81,7 @@ pnpm run dev
 ```bash
 pnpm tauri dev
 ```
-秒级唤起原生独立桌面应用窗口，无缝调用本地 Git 执行器。实际内存占用以窗口底部状态栏的 `RAM` 指示为准（目标 < 60MB）。
+唤起原生桌面窗口，调用本机 Git。顶栏和底部状态栏都会显示进程 RSS（`App.tsx` 每 8 秒调一次 `process_memory_mb`）。目标 < 60MB，以界面读数为准。
 
 ### 4. 构建 Windows 安装包（NSIS）
 ```bash
@@ -112,6 +114,7 @@ pnpm tauri build
 | 强制推送（仅 `--force-with-lease`） | `push_to` 的 `force` 参数 + `preview_push` 的 `needsForce`，界面 `src/components/PushDialog.tsx`；代码中不使用 `--force` |
 | 自绘输入 / 确认弹窗（无原生 `prompt` / `confirm`） | `src/components/common/askInput.ts` / `askConfirm.ts` / `dialogQueue.ts` / `InputDialog.tsx` / `ConfirmHost.tsx` |
 | Changelist 重命名 / 删除 | `src/components/CommitView/ChangelistTree.tsx`（`localStorage` key `snailgit.changelists.<repoKey>`，存储值保持 `更改` / `全部`） |
+| 日志分页 | `src-tauri/src/git_ops.rs` 的 `LOG_PAGE_SIZE = 200`、`LOG_FETCH_CAP = 20_000`；继续加载到上限后停止。已加载的行整页渲染，**没有虚拟滚动** |
 
 工程约定（i18n、依赖白名单、Rust 命令链路、无前端测试框架等）见 [AGENTS.md](AGENTS.md)。
 
