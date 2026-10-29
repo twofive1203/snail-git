@@ -94,9 +94,11 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
-`src-tauri/tauri.conf.json` 当前只配置了 Windows NSIS 目标（`bundle.targets: ["nsis"]`，`currentUser` 安装模式），产出 `.exe` 安装器。macOS / Linux 未支持，也没有对应打包目标或下载入口，欢迎贡献。
+`src-tauri/tauri.conf.json` 当前只配置了 Windows NSIS 目标（`bundle.targets: ["nsis"]`，`currentUser` 安装模式），产出 `.exe` 安装器。macOS / Linux 未支持，没有对应打包目标。
 
-`.github/workflows/windows-check.yml` 只在 Windows 上跑现有的类型检查、前端 lint 和 Rust 测试。仓库公开到 GitHub 之后它才会在远程执行；现在还没有挂上远程检查，本仓库不据此声称检查已经在跑。
+推送 `v` 开头的语义化版本标签（例如 `v0.1.0`）会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：在 Windows 上先跑现有检查，再构建 NSIS 安装包并上传到同名 GitHub Release。标签去掉 `v` 之后必须与 `src-tauri/tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml` 的 `version` 一致，否则工作流会在构建前失败。安装包未签名。带 `-` 的标签（如 `v0.1.0-beta.1`）会标成预发布。
+
+[`.github/workflows/windows-check.yml`](.github/workflows/windows-check.yml) 在推送和拉取请求上跑类型检查、前端 lint 和 Rust 测试，只使用 Windows runner。
 
 ## 界面截图
 

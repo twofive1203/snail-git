@@ -32,4 +32,10 @@ pnpm test:rust
 
 分别是前端类型检查、前端 lint、Rust 测试（含 Git 行为测试）。没有前端测试运行器，不要为了贡献新加 vitest 或 jest。
 
-`.github/workflows/windows-check.yml` 覆盖上面三条命令，并且只跑 Windows。仓库公开到 GitHub 之后，推送和拉取请求才会触发它。仓库还没公开时，这份工作流不会在远程执行。
+`.github/workflows/windows-check.yml` 覆盖上面三条命令，并且只跑 Windows。推送和拉取请求会触发它。
+
+## 发版
+
+先把 `src-tauri/tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml` 的 `version` 改成同一个语义化版本并提交，再推送标签 `v` + 该版本，例如 `v0.1.0`。`.github/workflows/release.yml` 会在 Windows 上重复上述检查，构建 NSIS 安装包，并上传到同名 GitHub Release。带 `-` 的标签会标成预发布。安装包未签名。macOS / Linux 不会构建。
+
+仓库 Settings → Actions → General → Workflow permissions 要允许工作流写入仓库内容，否则发版工作流无法创建 Release。

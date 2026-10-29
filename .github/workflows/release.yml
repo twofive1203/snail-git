@@ -1,0 +1,70 @@
+name: release
+
+# 推送 v* 标签时构建 Windows NSIS，并上传到同名 GitHub Release。
+# 仓库 Settings → Actions → General → Workflow permissions 需允许写入 contents，
+# 否则创建 Release 会报 Resource not accessible by integration。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check tag version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+            throw "标签 '$tag' 必须是 v 加语义化版本，例如 v0.1.0 或 v0.1.0-beta.1。"
+          }
+          $version = $tag.Substring(1)
+          $appVersion = (Get-Content -Raw -Path src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $packageVersion = (Get-Content -Raw -Path package.json | ConvertFrom-Json).version
+          $cargoVersion = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          $mismatches = @()
+          if ($appVersion -ne $version) { $mismatches += "src-tauri/tauri.conf.json=$appVersion" }
+          if ($packageVersion -ne $version) { $mismatches += "package.json=$packageVersion" }
+          if ($cargoVersion -ne $version) { $mismatches += "src-tauri/Cargo.toml=$cargoVersion" }
+          if ($mismatches.Count -gt 0) {
+            throw "标签版本 $version 与仓库版本不一致：$($mismatches -join ', ')。打标签前先把这三处改成 $version。"
+          }
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Rust tests
+        run: pnpm test:rust
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: SnailGit ${{ github.ref_name }}
+          releaseBody: |
+            Windows NSIS installer (current user). Not code-signed. macOS and Linux are not built.
+
+            Windows NSIS 安装包（当前用户）。未签名。不构建 macOS / Linux。
+          releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generateReleaseNotes: true
+          uploadUpdaterJson: false
