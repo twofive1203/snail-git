@@ -423,6 +423,20 @@ fn shelf_dir(repo_path: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// 架藏编号来自前端，直接拼进文件名。不允许分隔符和 `.`，否则 `../../x` 会读到
+/// shelves 目录之外的 json。所有按编号定位架藏的入口都必须过这里。
+fn validate_shelf_id(id: &str) -> Result<&str, String> {
+    if id.is_empty() || id.chars().any(|ch| matches!(ch, '/' | '\\' | '.')) {
+        return Err(format!("无效的架藏编号：{id}"));
+    }
+    Ok(id)
+}
+
+fn shelf_file(repo_path: &str, id: &str) -> Result<PathBuf, String> {
+    let name = validate_shelf_id(id)?;
+    Ok(shelf_dir(repo_path)?.join(format!("{name}.json")))
+}
+
 pub fn repo_id(path: &str) -> String {
     let norm = normalize_path(path);
     let mut hash: u64 = 1469598103934665603;
@@ -2838,9 +2852,7 @@ pub fn checkout_branch(repo: &str, name: &str) -> Result<String, String> {
 pub fn create_branch(repo: &str, name: &str, start_point: Option<&str>) -> Result<String, String> {
     let top = validate_repo(repo)?;
     let name = name.trim();
-    if name.is_empty() || name.contains("..") || name.contains(' ') || name.contains('\\') {
-        return Err("分支名不合法".into());
-    }
+    validate_branch_name(name)?;
     let output = if let Some(start) = start_point {
         run_git(&top, &["switch", "-c", name, "--", start], Duration::from_secs(20))?
     } else {
@@ -5426,7 +5438,7 @@ pub fn create_shelf(repo: &str, name: &str, paths: &[String]) -> Result<ShelfIte
 
 pub fn unshelve(repo: &str, id: &str) -> Result<String, String> {
     let top = validate_repo(repo)?;
-    let path = shelf_dir(&top)?.join(format!("{id}.json"));
+    let path = shelf_file(&top, id)?;
     let raw = fs::read_to_string(&path).map_err(|_| "找不到架藏".to_string())?;
     let disk: ShelfDisk = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     if !disk.patch.trim().is_empty() {
@@ -5448,7 +5460,7 @@ pub fn unshelve(repo: &str, id: &str) -> Result<String, String> {
 
 pub fn delete_shelf(repo: &str, id: &str) -> Result<(), String> {
     let top = validate_repo(repo)?;
-    let path = shelf_dir(&top)?.join(format!("{id}.json"));
+    let path = shelf_file(&top, id)?;
     fs::remove_file(path).map_err(|e| format!("删除架藏失败：{e}"))?;
     Ok(())
 }
@@ -5557,12 +5569,22 @@ pub fn toggle_favorite_branch(repo: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 与 `git check-ref-format` 对齐：这些字符会把名字解析成选项或 refspec。
+/// 名字既来自用户输入，也来自远端分支列表。
 fn validate_branch_name(name: &str) -> Result<(), String> {
     if name.is_empty()
         || name.starts_with('-')
+        || name.starts_with('/')
+        || name.starts_with('.')
         || name.ends_with('/')
+        || name.ends_with('.')
+        || name.ends_with(".lock")
         || name.contains("..")
-        || name.chars().any(|ch| matches!(ch, ' ' | '\n' | '\0' | '\\'))
+        || name.contains("//")
+        || name.contains("@{")
+        || name
+            .chars()
+            .any(|ch| matches!(ch, ' ' | '\n' | '\0' | '\\' | '~' | '^' | ':' | '?' | '*' | '['))
     {
         return Err(format!("无效的分支名：{name}"));
     }
@@ -5865,7 +5887,8 @@ pub fn clone_repo(
 }
 
 fn pick_save_path(default_name: &str) -> Result<Option<String>, String> {
-    let safe = default_name.replace('\\', "").replace('\'', "");
+    // 单引号字符串里只有 `'` 需要转义（加倍）；`\` 和 `$` 都是字面量，删掉反而会改掉文件名。
+    let safe = default_name.replace('\'', "''");
     let script = format!(
         r#"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -6123,10 +6146,7 @@ fn new_file_patch(path: &str, content: &str) -> PatchFileDto {
 
 pub fn shelf_patch_files(repo: &str, id: &str) -> Result<Vec<PatchFileDto>, String> {
     let top = validate_repo(repo)?;
-    if id.is_empty() || id.chars().any(|ch| matches!(ch, '/' | '\\' | '.')) {
-        return Err("无效的架藏编号".into());
-    }
-    let path = shelf_dir(&top)?.join(format!("{id}.json"));
+    let path = shelf_file(&top, id)?;
     let raw = fs::read_to_string(&path).map_err(|_| "找不到架藏".to_string())?;
     let disk: ShelfDisk = serde_json::from_str(&raw).map_err(|err| err.to_string())?;
     let mut files = patch_to_files(&disk.patch);
@@ -6789,6 +6809,28 @@ mod tests {
         assert!(auth_hint("fatal: could not read Username: terminal prompts disabled").is_some());
         assert!(auth_hint("Permission denied (publickey).").is_some());
         assert!(auth_hint("merge conflict in a.txt").is_none());
+    }
+
+    #[test]
+    fn branch_name_rejects_option_and_refspec_chars() {
+        for ok in ["main", "feature/x", "release-1.2", "fix_thing"] {
+            assert!(validate_branch_name(ok).is_ok(), "{ok} should pass");
+        }
+        for bad in ["-foo", ".hidden", "a//b", "a b", "src~1", "a^b", "a:b", "a?b", "a*b", "a[b", "a@{", "a.lock"] {
+            assert!(validate_branch_name(bad).is_err(), "{bad} should fail");
+        }
+        // 删除远程分支传的是 origin/feature，不能被斜线规则误杀
+        assert!(validate_branch_name("origin/feature").is_ok());
+    }
+
+    #[test]
+    fn shelf_id_cannot_escape_shelf_dir() {
+        assert!(validate_shelf_id("1700000000000000000").is_ok());
+        assert!(validate_shelf_id("shelf").is_ok());
+        assert!(validate_shelf_id("").is_err());
+        assert!(validate_shelf_id("../../evil").is_err());
+        assert!(validate_shelf_id(r"a\b").is_err());
+        assert!(validate_shelf_id("a.json").is_err());
     }
 
     #[test]
