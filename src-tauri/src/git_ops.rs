@@ -6693,6 +6693,7 @@ mod tests {
         let root_s = root.to_string_lossy().to_string();
         let local_s = local.to_string_lossy().to_string();
         git_ok(&root_s, &["clone", &origin_s, &local_s]);
+        configure_identity(&local_s);
 
         // 两边各自提交对同一行不同的修改，制造确定会冲突的场景。
         fs::write(origin.join("a.txt"), "remote\n").unwrap();
@@ -6857,8 +6858,14 @@ mod tests {
         fs::create_dir_all(path).unwrap();
         let cwd = path.to_string_lossy().to_string();
         git_ok(&cwd, &["init", "-b", "main"]);
-        git_ok(&cwd, &["config", "user.email", "test@snailgit.local"]);
-        git_ok(&cwd, &["config", "user.name", "SnailGit Test"]);
+        configure_identity(&cwd);
+    }
+
+    // clone 不会复制源仓库的 local config。CI 没有全局 user.name，
+    // 克隆出来的仓库再提交会报 Author identity unknown。
+    fn configure_identity(cwd: &str) {
+        git_ok(cwd, &["config", "user.email", "test@snailgit.local"]);
+        git_ok(cwd, &["config", "user.name", "SnailGit Test"]);
     }
 
     #[test]
@@ -7160,6 +7167,7 @@ mod tests {
         let root_s = root.to_string_lossy().to_string();
         let local_s = local.to_string_lossy().to_string();
         git_ok(&root_s, &["clone", &origin_s, &local_s]);
+        configure_identity(&local_s);
         (root, origin_s, local_s)
     }
 
