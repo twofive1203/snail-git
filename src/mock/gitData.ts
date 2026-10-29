@@ -4,7 +4,7 @@ export const mockRepositories: GitRepository[] = [
   {
     id: 'repo-1',
     name: 'snail-git',
-    path: 'D:/workspace/aiwork/snail-git',
+    path: 'C:/projects/snail-git',
     currentBranch: 'main',
     aheadCount: 1,
     behindCount: 0,
@@ -15,7 +15,7 @@ export const mockRepositories: GitRepository[] = [
   {
     id: 'repo-2',
     name: 'eam-agent',
-    path: 'D:/workspace/uinnova/eam-agent',
+    path: 'C:/projects/eam-agent',
     currentBranch: 'feature/agent-v2',
     aheadCount: 3,
     behindCount: 1,
@@ -26,7 +26,7 @@ export const mockRepositories: GitRepository[] = [
   {
     id: 'repo-3',
     name: 'cloud-gateway',
-    path: 'D:/workspace/backend/cloud-gateway',
+    path: 'C:/projects/cloud-gateway',
     currentBranch: 'develop',
     aheadCount: 0,
     behindCount: 0,
@@ -37,7 +37,7 @@ export const mockRepositories: GitRepository[] = [
   {
     id: 'repo-4',
     name: 'design-system',
-    path: 'D:/workspace/frontend/design-system',
+    path: 'C:/projects/design-system',
     currentBranch: 'main',
     aheadCount: 0,
     behindCount: 2,
